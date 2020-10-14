@@ -223,6 +223,8 @@ typedef struct AOCSFetchDescData
 	 * last sequence from gp_fastsequence.
 	 */
 	int64			lastSequence[AOTupleId_MultiplierSegmentFileNum];
+	int64 			lastRowNum[AOTupleId_MultiplierSegmentFileNum];
+	int64 			firstRowNum[AOTupleId_MultiplierSegmentFileNum];
 
 	char			*segmentFileName;
 	int				segmentFileNameMaxLen;
@@ -354,6 +356,8 @@ extern AOCSFetchDesc aocs_fetch_init(Relation relation,
 extern bool aocs_fetch(AOCSFetchDesc aocsFetchDesc,
 					   AOTupleId *aoTupleId,
 					   TupleTableSlot *slot);
+extern bool aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
+							   AOTupleId *aoTupleId);
 extern void aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc);
 extern AOCSDeleteDesc aocs_delete_init(Relation rel);
 extern TM_Result aocs_delete(AOCSDeleteDesc desc, 
