@@ -361,6 +361,9 @@ typedef struct TableAmRoutine
 											 ItemPointer tid,
 											 Snapshot snapshot,
 											 bool *all_dead);
+	bool		(*tid_visible) (struct IndexFetchTableData *scan,
+								ItemPointer tid,
+								Snapshot snapshot);
 
 	/* ------------------------------------------------------------------------
 	 * Callbacks for non-modifying operations on individual tuples
