@@ -490,6 +490,9 @@ appendonly_index_fetch_tuple(struct IndexFetchTableData *scan,
 	 */
 	Assert(aoscan->aofetch->snapshot == snapshot);
 
+	if (aoscan->xs_base.indexonly)
+		return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
+
 	appendonly_fetch(aoscan->aofetch, (AOTupleId *) tid, slot);
 
 	return !TupIsNull(slot);
