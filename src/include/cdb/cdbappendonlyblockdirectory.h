@@ -97,7 +97,6 @@ typedef struct AppendOnlyBlockDirectory
 
 	MemoryContext memoryContext;
 	
-	int				totalSegfiles;
 	FileSegInfo 	**segmentFileInfo;
 
 	/*
@@ -186,7 +185,6 @@ extern void AppendOnlyBlockDirectory_Init_forSearch(
 	AppendOnlyBlockDirectory *blockDirectory,
 	Snapshot appendOnlyMetaDataSnapshot,
 	FileSegInfo **segmentFileInfo,
-	int totalSegfiles,
 	Relation aoRel,
 	int numColumnGroups,
 	bool isAOCol,
