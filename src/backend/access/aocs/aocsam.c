@@ -1232,30 +1232,13 @@ openFetchSegmentFile(AOCSFetchDesc aocsFetchDesc,
 					 int openSegmentFileNum,
 					 int colNo)
 {
-	int			i;
-
 	AOCSFileSegInfo *fsInfo;
-	int			segmentFileNum;
 	int64		logicalEof;
 	DatumStreamFetchDesc datumStreamFetchDesc = aocsFetchDesc->datumStreamFetchDesc[colNo];
 
 	Assert(!datumStreamFetchDesc->currentSegmentFile.isOpen);
 
-	i = 0;
-	while (true)
-	{
-		if (i >= aocsFetchDesc->totalSegfiles)
-			return false;
-		/* Segment file not visible in catalog information. */
-
-		fsInfo = aocsFetchDesc->segmentFileInfo[i];
-		segmentFileNum = fsInfo->segno;
-		if (openSegmentFileNum == segmentFileNum)
-		{
-			break;
-		}
-		i++;
-	}
+	fsInfo = aocsFetchDesc->segmentFileInfo[openSegmentFileNum];
 
 	/*
 	 * Don't try to open a segment file when its EOF is 0, since the file may
@@ -1352,7 +1335,7 @@ aocs_fetch_init(Relation relation,
                                  NULL);
 
 	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfo(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
+		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -1366,13 +1349,13 @@ aocs_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aocsFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aocsFetchDesc->lastSequence[segno] = ReadLastSequence(aocsFetchDesc->segrelid, segno);
+		aocsFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
 	}
 
 	AppendOnlyBlockDirectory_Init_forSearch(
 											&aocsFetchDesc->blockDirectory,
 											appendOnlyMetaDataSnapshot,
 											(FileSegInfo **) aocsFetchDesc->segmentFileInfo,
-											aocsFetchDesc->totalSegfiles,
 											aocsFetchDesc->relation,
 											relation->rd_att->natts,
 											true,
@@ -1675,7 +1658,7 @@ aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc)
 
 	if (aocsFetchDesc->segmentFileInfo)
 	{
-		FreeAllAOCSSegFileInfo(aocsFetchDesc->segmentFileInfo, aocsFetchDesc->totalSegfiles);
+		FreeAllAOCSSegFileInfoArray(aocsFetchDesc->segmentFileInfo);
 		pfree(aocsFetchDesc->segmentFileInfo);
 		aocsFetchDesc->segmentFileInfo = NULL;
 	}
