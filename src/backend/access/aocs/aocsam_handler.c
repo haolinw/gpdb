@@ -921,6 +921,48 @@ aoco_index_fetch_tuple_exists(Relation rel,
 	return visible;
 }
 
+static bool
+aocs_tid_visible(struct IndexFetchTableData *scan,
+				 ItemPointer tid,
+				 Snapshot snapshot)
+{
+	IndexFetchAOCOData *aocoscan = (IndexFetchAOCOData *) scan;
+
+	if (!aocoscan->aocofetch)
+	{
+		Snapshot	appendOnlyMetaDataSnapshot;
+		int			natts;
+
+		/* Initiallize the projection info, assumes the whole row */
+		Assert(!aocoscan->proj);
+		natts = RelationGetNumberOfAttributes(scan->rel);
+		aocoscan->proj = palloc(natts * sizeof(*aocoscan->proj));
+		MemSet(aocoscan->proj, true, natts * sizeof(*aocoscan->proj));
+
+		appendOnlyMetaDataSnapshot = snapshot;
+		if (appendOnlyMetaDataSnapshot == SnapshotAny)
+		{
+			/*
+			 * the append-only meta data should never be fetched with
+			 * SnapshotAny as bogus results are returned.
+			 */
+			appendOnlyMetaDataSnapshot = GetTransactionSnapshot();
+		}
+
+		aocoscan->aocofetch = aocs_fetch_init(aocoscan->xs_base.rel,
+											  snapshot,
+											  appendOnlyMetaDataSnapshot,
+											  aocoscan->proj);
+	}
+	else
+	{
+		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
+		 * between calls? Add a sanity check for that here. */
+	}
+
+	return aocs_tuple_visible(aocoscan->aocofetch, tid);
+}
+
 static void
 aoco_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
                         int options, BulkInsertState bistate)
@@ -2121,6 +2163,7 @@ static const TableAmRoutine ao_column_methods = {
 
 	.dml_init = aoco_dml_init,
 	.dml_finish = aoco_dml_finish,
+	.tid_visible = aocs_tid_visible,
 
 	.tuple_insert = aoco_tuple_insert,
 	.tuple_insert_speculative = aoco_tuple_insert_speculative,
