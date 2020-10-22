@@ -1352,7 +1352,7 @@ aocs_fetch_init(Relation relation,
                                  NULL);
 
 	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
+		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -1649,10 +1649,9 @@ aocs_fetch(AOCSFetchDesc aocsFetchDesc,
 	return found;
 }
 
-
 bool
 aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
-						 AOTupleId *aoTupleId)
+				   AOTupleId *aoTupleId)
 {
 	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
@@ -1698,7 +1697,6 @@ aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
 
 	return true;
 }
-
 
 void
 aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc)

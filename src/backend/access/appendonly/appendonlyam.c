@@ -2100,9 +2100,8 @@ appendonly_fetch_init(Relation relation,
 	aoFetchDesc->segmentFileInfo =
 		GetAllFileSegInfoArray(
 						  relation,
-						  appendOnlyMetaDataSnapshot,
-						  &aoFetchDesc->totalSegfiles,
-						  NULL);
+						  appendOnlyMetaDataSnapshot
+						  );
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,

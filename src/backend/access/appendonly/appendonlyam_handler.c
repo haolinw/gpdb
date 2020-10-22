@@ -565,9 +565,6 @@ appendonly_index_fetch_tuple(struct IndexFetchTableData *scan,
 	 */
 	Assert(aoscan->aofetch->snapshot == snapshot);
 
-	if (aoscan->xs_base.indexonly)
-		return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
-
 	appendonly_fetch(aoscan->aofetch, (AOTupleId *) tid, slot);
 
 	/*
@@ -692,6 +689,39 @@ appendonly_index_fetch_tuple_exists(Relation rel,
 	return visible;
 }
 
+static bool
+appendonly_tid_visible(struct IndexFetchTableData *scan,
+					   ItemPointer tid,
+					   Snapshot snapshot)
+{
+	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
+	if (!aoscan->aofetch)
+	{
+		Snapshot	appendOnlyMetaDataSnapshot;
+
+		appendOnlyMetaDataSnapshot = snapshot;
+		if (appendOnlyMetaDataSnapshot == SnapshotAny)
+		{
+			/*
+			 * the append-only meta data should never be fetched with
+			 * SnapshotAny as bogus results are returned.
+			 */
+			appendOnlyMetaDataSnapshot = GetTransactionSnapshot();
+		}
+
+		aoscan->aofetch =
+				appendonly_fetch_init(aoscan->xs_base.rel,
+									  snapshot,
+									  appendOnlyMetaDataSnapshot);
+	}
+	else
+	{
+		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
+		 * between calls? Add a sanity check for that here. */
+	}
+
+	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
+}
 
 /* ------------------------------------------------------------------------
  * Callbacks for non-modifying operations on individual tuples for
@@ -2134,6 +2164,7 @@ static const TableAmRoutine ao_row_methods = {
 
 	.dml_init = appendonly_dml_init,
 	.dml_finish = appendonly_dml_finish,
+	.tid_visible = appendonly_tid_visible,
 
 	.tuple_insert = appendonly_tuple_insert,
 	.tuple_insert_speculative = appendonly_tuple_insert_speculative,
