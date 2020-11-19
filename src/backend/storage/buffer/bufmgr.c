@@ -42,9 +42,11 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
+#include "commands/vacuum.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
+#include "optimizer/plancat.h"
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
@@ -2962,17 +2964,43 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 		case RELKIND_AOVISIMAP:
 		case RELKIND_AOBLOCKDIR:
 			{
-				/*
-				 * Not every table AM uses BLCKSZ wide fixed size blocks.
-				 * Therefore tableam returns the size in bytes - but for the
-				 * purpose of this routine, we want the number of blocks.
-				 * Therefore divide, rounding up.
-				 */
-				uint64		szbytes;
+				if (RelationIsAppendOptimized(relation))
+				{
+					Snapshot snapshot;
+					FileSegTotals *fileSegTotals;
+					double tuples;
+					double blocks;
 
-				szbytes = table_relation_size(relation, forkNum);
+					/* Get total row count among all segment files. */
+					snapshot = RegisterSnapshot(GetLatestSnapshot());
+					fileSegTotals = (RelationIsAoCols(relation)) ?
+						GetAOCSSSegFilesTotals(relation, snapshot) :
+						GetSegFilesTotals(relation, snapshot);
+					tuples = (double) fileSegTotals->totaltuples;
+					UnregisterSnapshot(snapshot);
 
-				return (szbytes + (BLCKSZ - 1)) / BLCKSZ;
+					blocks = (tuples + (gp_appendonly_analyze_block_size - 1)) / gp_appendonly_analyze_block_size;
+					if (blocks > APPENDONLY_ANALYZE_BLOCK_MAX)
+					{
+						blocks = APPENDONLY_ANALYZE_BLOCK_MAX;
+					}
+
+					return (BlockNumber) blocks;
+				}
+				else
+				{
+					/*
+					 * Not every table AM uses BLCKSZ wide fixed size blocks.
+					 * Therefore tableam returns the size in bytes - but for the
+					 * purpose of this routine, we want the number of blocks.
+					 * Therefore divide, rounding up.
+					 */
+					uint64		szbytes;
+
+					szbytes = table_relation_size(relation, forkNum);
+
+					return (szbytes + (BLCKSZ - 1)) / BLCKSZ;
+				}
 			}
 		case RELKIND_VIEW:
 		case RELKIND_COMPOSITE_TYPE:

@@ -1403,32 +1403,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 											  totalrows, totaldeadrows);
 	}
 
-	/*
-	 * GPDB: Analyze does make a lot of assumptions regarding the file layout of a
-	 * relation. These assumptions are heap specific and do not hold for AO/AOCO
-	 * relations. In the case of AO/AOCO, what is actually needed and used instead
-	 * of number of blocks, is number of tuples.
-	 *
-	 * GPDB_12_MERGE_FIXME: BlockNumber is uint32 and Number of tuples is uint64.
-	 * That means that after row number UINT_MAX we will never analyze the table.
-	 */
-	if (RelationIsAppendOptimized(onerel))
-	{
-		BlockNumber pages;
-		double		tuples;
-		double		allvisfrac;
-		int32		attr_widths;
-
-		table_relation_estimate_size(onerel,	&attr_widths, &pages,
-									&tuples, &allvisfrac);
-
-		if (tuples > UINT_MAX)
-			tuples = UINT_MAX;
-
-		totalblocks = (BlockNumber)tuples;
-	}
-	else
-		totalblocks = RelationGetNumberOfBlocks(onerel);
+	totalblocks = RelationGetNumberOfBlocks(onerel);
 
 	/* Need a cutoff xmin for HeapTupleSatisfiesVacuum */
 	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);

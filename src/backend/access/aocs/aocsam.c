@@ -284,8 +284,8 @@ close_ds_write(DatumStreamWrite **ds, int nvp)
 	}
 }
 
-static void
-initscan_with_colinfo(AOCSScanDesc scan)
+void
+aocs_initscan(AOCSScanDesc scan)
 {
 	MemoryContext	oldCtx;
 	AttrNumber		natts;
@@ -318,13 +318,15 @@ initscan_with_colinfo(AOCSScanDesc scan)
 
 	scan->cur_seg = -1;
 	scan->cur_seg_row = 0;
+	scan->total_row = 0;
+	scan->rows_to_scan = 0;
 
 	ItemPointerSet(&scan->cdb_fake_ctid, 0, 0);
 
 	pgstat_count_heap_scan(scan->rs_base.rs_rd);
 }
 
-static int
+int
 open_next_scan_seg(AOCSScanDesc scan)
 {
 	while (++scan->cur_seg < scan->total_seg)
@@ -395,7 +397,7 @@ open_next_scan_seg(AOCSScanDesc scan)
 	return -1;
 }
 
-static void
+void
 close_cur_scan_seg(AOCSScanDesc scan)
 {
 	if (scan->cur_seg < 0)
@@ -511,6 +513,9 @@ aocs_beginscan_internal(Relation relation,
 	scan->total_seg = total_seg;
 	scan->columnScanInfo.scanCtx = CurrentMemoryContext;
 
+	/* block size for analyze scan */
+	scan->analyze_block_size = gp_appendonly_analyze_block_size;
+
 	/* relationTupleDesc will be inited by the slot when needed */
 	scan->columnScanInfo.relationTupleDesc = NULL;
 
@@ -568,7 +573,7 @@ aocs_rescan(AOCSScanDesc scan)
 	close_cur_scan_seg(scan);
 	if (scan->columnScanInfo.ds)
 		close_ds_read(scan->columnScanInfo.ds, scan->columnScanInfo.relationTupleDesc->natts);
-	initscan_with_colinfo(scan);
+	aocs_initscan(scan);
 }
 
 void
@@ -709,7 +714,7 @@ aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot)
 		scan->columnScanInfo.relationTupleDesc = slot->tts_tupleDescriptor;
 		/* Pin it! ... and of course release it upon destruction / rescan */
 		PinTupleDesc(scan->columnScanInfo.relationTupleDesc);
-		initscan_with_colinfo(scan);
+		aocs_initscan(scan);
 	}
 
 	natts = slot->tts_tupleDescriptor->natts;
@@ -784,6 +789,7 @@ ReadNext:
 			}
 		}
 
+		scan->total_row++;
 		scan->cur_seg_row++;
 		if (rowNum == INT64CONST(-1))
 		{

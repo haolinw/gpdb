@@ -120,6 +120,9 @@ static void AppendOnlyExecutorReadBlock_Init(
 static void AppendOnlyExecutorReadBlock_Finish(
 								   AppendOnlyExecutorReadBlock *executorReadBlock);
 
+static void AppendOnlyExecutorReadBlock_NewSegmentCounts(
+										AppendOnlyExecutorReadBlock *executorReadBlock);
+
 static void AppendOnlyExecutorReadBlock_ResetCounts(
 										AppendOnlyExecutorReadBlock *executorReadBlock);
 
@@ -154,7 +157,7 @@ initscan(AppendOnlyScanDesc scan, ScanKey key)
 /*
  * Open the next file segment to scan and allocate all resources needed for it.
  */
-static bool
+bool
 SetNextFileSegForRead(AppendOnlyScanDesc scan)
 {
 	Relation	reln = scan->aos_rd;
@@ -297,6 +300,8 @@ SetNextFileSegForRead(AppendOnlyScanDesc scan)
 												 &scan->executorReadBlock,
 												  /* blockFirstRowNum */ 1);
 
+	AppendOnlyExecutorReadBlock_NewSegmentCounts(&scan->executorReadBlock);
+
 	/* ready to go! */
 	scan->aos_need_new_segfile = false;
 
@@ -415,7 +420,7 @@ SetCurrentFileSegForWrite(AppendOnlyInsertDesc aoInsertDesc)
 /*
  * Finished scanning this file segment. Close it.
  */
-static void
+void
 CloseScannedFileSeg(AppendOnlyScanDesc scan)
 {
 	AppendOnlyStorageRead_CloseFile(&scan->storageRead);
@@ -464,7 +469,7 @@ CloseWritableFileSeg(AppendOnlyInsertDesc aoInsertDesc)
 
 /* ------------------------------------------------------------------------------ */
 
-static void
+void
 AppendOnlyExecutorReadBlock_GetContents(AppendOnlyExecutorReadBlock *executorReadBlock)
 {
 	VarBlockCheckError varBlockCheckError;
@@ -655,7 +660,7 @@ AppendOnlyExecutorReadBlock_GetContents(AppendOnlyExecutorReadBlock *executorRea
 	}
 }
 
-static bool
+bool
 AppendOnlyExecutorReadBlock_GetBlockInfo(AppendOnlyStorageRead *storageRead,
 										 AppendOnlyExecutorReadBlock *executorReadBlock)
 {
@@ -707,7 +712,7 @@ AppendOnlyExecutionReadBlock_SetPositionInfo(AppendOnlyExecutorReadBlock *execut
 	executorReadBlock->blockFirstRowNum = blockFirstRowNum;
 }
 
-static void
+void
 AppendOnlyExecutionReadBlock_FinishedScanBlock(AppendOnlyExecutorReadBlock *executorReadBlock)
 {
 	executorReadBlock->blockFirstRowNum += executorReadBlock->rowCount;
@@ -762,9 +767,17 @@ AppendOnlyExecutorReadBlock_Finish(AppendOnlyExecutorReadBlock *executorReadBloc
 }
 
 static void
+AppendOnlyExecutorReadBlock_NewSegmentCounts(AppendOnlyExecutorReadBlock *executorReadBlock)
+{
+	executorReadBlock->segmentRowsScanned = 0;
+}
+
+static void
 AppendOnlyExecutorReadBlock_ResetCounts(AppendOnlyExecutorReadBlock *executorReadBlock)
 {
-	executorReadBlock->totalRowsScannned = 0;
+	executorReadBlock->totalRowsScanned = 0;
+	executorReadBlock->rows_to_scan = 0;
+	AppendOnlyExecutorReadBlock_NewSegmentCounts(executorReadBlock);
 }
 
 /*
@@ -1034,7 +1047,9 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 
 				executorReadBlock->currentItemCount++;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->segmentRowsScanned++;
+
+				executorReadBlock->totalRowsScanned++;
 
 				if (itemLen > 0)
 				{
@@ -1087,7 +1102,9 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 				executorReadBlock->singleRow = NULL;
 				executorReadBlock->singleRowLen = 0;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->segmentRowsScanned++;
+
+				executorReadBlock->totalRowsScanned++;
 
 				if (AppendOnlyExecutorReadBlock_ProcessTuple(
 															 executorReadBlock,
@@ -1196,7 +1213,7 @@ AppendOnlyExecutorReadBlock_FetchTuple(AppendOnlyExecutorReadBlock *executorRead
 /*
  * You can think of this scan routine as get next "executor" AO block.
  */
-static bool
+bool
 getNextBlock(AppendOnlyScanDesc scan)
 {
 	if (scan->aos_need_new_segfile)
@@ -1493,6 +1510,9 @@ appendonly_beginrangescan_internal(Relation relation,
 	scan->snapshot = snapshot;
 	scan->aos_nkeys = nkeys;
 	scan->aoScanInitContext = CurrentMemoryContext;
+
+	/* block size for analyze scan */
+	scan->analyze_block_size = gp_appendonly_analyze_block_size;
 
 	initStringInfo(&titleBuf);
 	appendStringInfo(&titleBuf, "Scan of Append-Only Row-Oriented relation '%s'",
