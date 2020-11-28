@@ -1403,7 +1403,29 @@ acquire_sample_rows(Relation onerel, int elevel,
 											  totalrows, totaldeadrows);
 	}
 
-	totalblocks = RelationGetNumberOfBlocks(onerel);
+	if (RelationIsAppendOptimized(onerel))
+	{
+		BlockNumber pages;
+		double		blocks;
+		double		tuples;
+		double		allvisfrac;
+		int32		attr_widths;
+
+		table_relation_estimate_size(onerel,	&attr_widths, &pages,
+									&tuples, &allvisfrac);
+
+		blocks = (tuples + (gp_appendonly_analyze_block_size - 1)) / gp_appendonly_analyze_block_size;
+		if (blocks > APPENDONLY_ANALYZE_BLOCK_MAX)
+		{
+			blocks = APPENDONLY_ANALYZE_BLOCK_MAX;
+		}
+
+		totalblocks = (BlockNumber) blocks;
+	}
+	else
+	{
+		totalblocks = RelationGetNumberOfBlocks(onerel);
+	}
 
 	/* Need a cutoff xmin for HeapTupleSatisfiesVacuum */
 	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);
