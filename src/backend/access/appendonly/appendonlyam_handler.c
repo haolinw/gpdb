@@ -1142,6 +1142,28 @@ appendonly_analyze_find_segment(AppendOnlyScanDesc scan, int64 targetrow)
 	return true;
 }
 
+/*
+ * AO table on a physical level is a collection of segments,
+ * each constructed from a variable sized blocks. This approach is
+ * not suitable for algorithm S from Knuth used by acquire_sample_rows().
+ * To overcome this limitation we treat AO table as a collection of
+ * segment files with a global sequence of rows among them.
+ *
+ * For example:
+ * - segno 1 with 100 rows - global positions 0-99
+ * - segno 2 with 200 rows - global positions 100-299
+ *
+ * This global sequence of rows is divided on some arbitrary number of
+ * "logical" analyze blocks fitting BlockNumber (uint32). These blocks
+ * are not interconnected with variable sized physical blocks of segment
+ * files - it is simply a range of global row positions. So block sampling
+ * by algorithm S from Knuth gives us the starting global position of a
+ * target block (the size of the block is fixed and known). We get a benefit
+ * of this schema when the number of blocks is more that 300 * statistics
+ * target. So if we are lucky enough there would be several physical variable
+ * sized blocks between logical blocks and we can just read their headers
+ * without data decompression.
+ */
 static bool
 appendonly_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
 							   BufferAccessStrategy bstrategy)
