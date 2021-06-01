@@ -142,7 +142,8 @@ extern PGDLLIMPORT LWLockPadded *MainLWLockArray;
 #define DistributedLogTruncateLock	(&MainLWLockArray[PG_NUM_INDIVIDUAL_LWLOCKS + 10].lock)
 #define FTSReplicationStatusLock	(&MainLWLockArray[PG_NUM_INDIVIDUAL_LWLOCKS + 11].lock)
 #define TwophaseCommitLock	(&MainLWLockArray[PG_NUM_INDIVIDUAL_LWLOCKS + 12].lock)
-#define GP_NUM_INDIVIDUAL_LWLOCKS		12
+#define WalCatchupThrottleLock		(&MainLWLockArray[PG_NUM_INDIVIDUAL_LWLOCKS + 13].lock)
+#define GP_NUM_INDIVIDUAL_LWLOCKS		14
 
 /*
  * It would probably be better to allocate separate LWLock tranches

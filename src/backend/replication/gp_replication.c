@@ -591,6 +591,34 @@ GetMirrorStatus(FtsResponse *response, bool *ready_for_syncrep)
 }
 
 /*
+ * Is the mirror catching up?
+ */
+bool
+gp_is_mirror_catching_up()
+{
+	int			i;
+
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		WalSnd *walsender = &WalSndCtl->walsnds[i];
+
+		SpinLockAcquire(&walsender->mutex);
+
+		if (walsender->is_for_gp_walreceiver &&
+			walsender->pid != 0 &&
+			walsender->state == WALSNDSTATE_CATCHUP)
+		{
+			SpinLockRelease(&walsender->mutex);
+			return true;
+		}
+
+		SpinLockRelease(&walsender->mutex);
+	}
+
+	return false;
+}
+
+/*
  * Set WalSndCtl->sync_standbys_defined to true to enable synchronous segment
  * WAL replication and insert synchronous_standby_names="*" into the
  * gp_replication.conf to persist this state in case of segment crash.
