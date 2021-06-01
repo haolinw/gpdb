@@ -74,6 +74,7 @@ extern void FTSReplicationStatusMarkDisconnectForReplication(const char *app_nam
 extern pg_time_t FTSGetReplicationDisconnectTime(const char *app_name);
 
 extern void GetMirrorStatus(FtsResponse *response, bool *ready_for_syncrep);
+extern bool gp_is_mirror_catching_up(void);
 extern void SetSyncStandbysDefined(void);
 extern void UnsetSyncStandbysDefined(void);
 
