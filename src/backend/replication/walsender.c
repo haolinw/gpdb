@@ -111,6 +111,8 @@
  */
 #define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)
 
+#define INVALID_STATE_VALUE PG_UINT32_MAX
+
 /* Array of WalSnds in shared memory */
 WalSndCtlData *WalSndCtl = NULL;
 
@@ -2384,6 +2386,8 @@ InitWalSenderSlot(void)
 			walsnd->is_for_gp_walreceiver =
 				(strcmp(application_name, GP_WALRECEIVER_APPNAME) == 0);
 
+			pg_atomic_init_u32(&walsnd->state_value, INVALID_STATE_VALUE);
+
 			break;
 		}
 	}
@@ -3303,11 +3307,34 @@ WalSndWaitStopping(void)
 	}
 }
 
+/* 
+ * Callback of WalSndSetState, to provide an interface to
+ * do some immediate setup associating to walsender state.
+ */
+static void
+WalSndSetStateCallback(WalSndState state, bool effective)
+{
+	volatile WalSnd *walsnd = MyWalSnd;
+	uint32 stval = INVALID_STATE_VALUE;
+
+	/* for WALSNDSTATE_CATCHUP */
+	if (state == WALSNDSTATE_CATCHUP && effective)
+		stval = (uint32)WALSNDSTATE_CATCHUP;
+	
+	/*
+	 * make sure to set or reset this value every time
+	 * WalSndSetState() is called
+	 */
+	(void) pg_atomic_exchange_u32(&walsnd->state_value, stval);
+}
+
 /* Set state for current walsender (only called in walsender) */
 void
 WalSndSetState(WalSndState state)
 {
-	WalSnd	   *walsnd = MyWalSnd;
+	/* use volatile pointer to prevent code rearrangement */
+	volatile WalSnd *walsnd = MyWalSnd;
+	bool is_walsender_active;
 
 	Assert(am_walsender);
 
@@ -3320,7 +3347,15 @@ WalSndSetState(WalSndState state)
 
 	SpinLockAcquire(&walsnd->mutex);
 	walsnd->state = state;
+	/* collect expected state related info under spinlock to be consistent with state */
+	is_walsender_active = (walsnd->pid != 0 && walsnd->is_for_gp_walreceiver);
 	SpinLockRelease(&walsnd->mutex);
+
+	/* 
+	 * callback after setting walsender state, to set
+	 * some associated variables
+	 */
+	WalSndSetStateCallback(state, is_walsender_active);
 
 	/*
 	 * If the walsender is not for GPDB primary-mirror replication,

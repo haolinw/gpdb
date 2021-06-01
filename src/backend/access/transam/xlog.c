@@ -48,6 +48,7 @@
 #include "postmaster/walwriter.h"
 #include "postmaster/startup.h"
 #include "replication/basebackup.h"
+#include "replication/gp_replication.h"
 #include "replication/logical.h"
 #include "replication/slot.h"
 #include "replication/origin.h"
@@ -13002,6 +13003,78 @@ initialize_wal_bytes_written(void)
 }
 
 /*
+ * Throttle during wal catchup. At the time mostly syncrep is off
+ * temporarily to avoid blocking the write transactions, but we also
+ * flow-control the new xlog to ensure it does not slow down catchup too
+ * much, as well as to reduce the risk of data loss when generating
+ * WALs too fast.
+ */
+static void
+throttle_for_catchup(void)
+{
+	/*
+	 * initialize throttle_size to rep_lag_avoidance_threshold (or 1024) KB,
+	 * this is a sub-criteria to trigger throttle logic
+	 */
+	int64_t throttle_size = (rep_lag_avoidance_threshold == 0 ?
+							  (1024 * 1024) : (rep_lag_avoidance_threshold * 1024));
+	/* predfine the interval of checking lag to 5ms when in throttle logic */
+	const int check_lag_interval = 5000;
+
+	XLogRecPtr orig_min_lsn = InvalidXLogRecPtr;
+	XLogRecPtr cur_min_lsn;
+	int64_t orig_lag, cur_lag;
+
+	/*
+	 * We only throttle "large" WAL written size requests since they may likely
+	 * increase the lag fast, while "small" size requests may not.
+	 */
+	if (wal_bytes_written <= throttle_size || IS_QUERY_DISPATCHER())
+		return;
+
+	/*
+	 * It is possible that wal state is streaming but syncrep is off. This
+	 * could happen if mirror has been down or mirror is streaming but fts has
+	 * not probed yet. For the later scenario we could throttle also but we
+	 * are not making the logic more complex given the window is small.
+	 */
+	for (;;)
+	{
+		/* no throttle if not in catchup state */
+		if (!gp_is_mirror_catching_up())
+			return;
+
+		/* Throttle in serial for the large write workload. */
+		LWLockAcquire(WalCatchupThrottleLock, LW_EXCLUSIVE);
+
+		cur_min_lsn = XLogGetReplicationSlotMinimumLSN();
+		cur_lag = GetFlushRecPtr() - cur_min_lsn;
+
+		LWLockRelease(WalCatchupThrottleLock);
+
+		if (XLogRecPtrIsInvalid(cur_min_lsn))
+			break;
+		
+		/* initialize orig_min_lsn to the first valid cur_min_lsn */
+		if (XLogRecPtrIsInvalid(orig_min_lsn))
+		{
+			orig_min_lsn = cur_min_lsn;
+			orig_lag = cur_lag;
+		}
+
+		/*
+		 * New wal with throttle_size size was generated.
+		 * Let's wait until 2 * throttle_size wal is streamed.
+		 */
+		if (orig_lag - cur_lag >= 2 * throttle_size)
+			break;
+		
+		/* sleep for 5ms and loop again */
+		pg_usleep(check_lag_interval);
+	}
+}
+
+/*
  * Transactions on commit, wait for replication and make sure WAL is flushed
  * up to commit lsn on mirror in GPDB. While commit is mandatory sync/wait
  * point, waiting for replication at some periodic intervals even before that
@@ -13027,10 +13100,18 @@ initialize_wal_bytes_written(void)
  * transactions starving concurrent transactions from commiting due to sync
  * rep. This interface provides a way for primary to avoid racing forward with
  * WAL generation and move at sustained speed with network and mirrors.
+ * 
+ * Throttle logic is added to slow down WAL writes in CATCHUP phase to help
+ * eventually transition to STREAMING state. Also it could help to reduce the
+ * risk of data loss in the case of syncrepo off when generating large WALs too
+ * fast.
  */
 void
 wait_to_avoid_large_repl_lag(void)
 {
+	/* throttle when mirror is in catchup state */
+	throttle_for_catchup();
+
 	/* rep_lag_avoidance_threshold is defined in KB */
 	if (rep_lag_avoidance_threshold &&
 		wal_bytes_written > (rep_lag_avoidance_threshold * 1024))
