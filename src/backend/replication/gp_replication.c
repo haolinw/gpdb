@@ -581,6 +581,27 @@ GetMirrorStatus(FtsResponse *response, bool *ready_for_syncrep)
 }
 
 /*
+ * Is the mirror catching up?
+ */
+bool
+gp_is_mirror_catching_up(void)
+{
+	int			i;
+	uint32		stval;
+
+	for (i = 0; i < max_wal_senders; i++)
+	{
+		volatile WalSnd *walsender = &WalSndCtl->walsnds[i];
+
+		stval = pg_atomic_read_u32(&walsender->state_value);
+		if (stval == (uint32)WALSNDSTATE_CATCHUP)
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * Set WalSndCtl->sync_standbys_defined to true to enable synchronous segment
  * WAL replication and insert synchronous_standby_names="*" into the
  * gp_replication.conf to persist this state in case of segment crash.
