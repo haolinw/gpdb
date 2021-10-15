@@ -1928,7 +1928,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 	BlockNumber targetseg;
 	BlockNumber nextsegno;
 
-	if (!v)
+	if (!v) /* TODO */
 		return NULL;			/* only possible if EXTENSION_RETURN_NULL */
 
 	targetseg = blkno / ((BlockNumber) RELSEG_SIZE);
