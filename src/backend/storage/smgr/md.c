@@ -441,9 +441,7 @@ mdunlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo, char relstor
 	 * registers fsync request. Hence need to clean out pending AO fsync
 	 * requests before unlink.
 	 */
-	if (!RelFileNodeBackendIsTemp(rnode) &&
-		(IsStandbyMode() || InRecovery ||
-		 !relstorage_is_ao(relstorage)))
+	if (!RelFileNodeBackendIsTemp(rnode))
 		ForgetRelationFsyncRequests(rnode.node, forkNum);
 
 	/* Now do the per-fork work */
