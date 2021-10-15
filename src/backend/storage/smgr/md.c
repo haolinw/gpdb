@@ -442,9 +442,13 @@ mdunlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo, char relstor
 	 * requests before unlink.
 	 */
 	if (!RelFileNodeBackendIsTemp(rnode) &&
-		(IsStandbyMode() || InRecovery ||
-		 !relstorage_is_ao(relstorage)))
-		ForgetRelationFsyncRequests(rnode.node, forkNum);
+		(IsStandbyMode() || InRecovery))
+	{
+		if (!relstorage_is_ao(relstorage)))
+			ForgetRelationFsyncRequests(rnode.node, forkNum);
+		else
+			AOForgetRelationFsyncRequests(rnode.node);
+	}
 
 	/* Now do the per-fork work */
 	if (forkNum == InvalidForkNumber)
@@ -1604,7 +1608,7 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno,
 	 * handling.  Drop table and drop database operations do not distinguish
 	 * between a heap and AO FORGET_* request.
 	 */
-	AssertImply(is_ao_segno, segno <= MAX_AOREL_CONCURRENCY * MaxTupleAttributeNumber);
+	/* AssertImply(is_ao_segno, segno <= MAX_AOREL_CONCURRENCY * MaxTupleAttributeNumber); */
 
 	/*
 	 * Append-optimized tables do not use relation forks currently.
@@ -1767,6 +1771,42 @@ ForgetRelationFsyncRequests(RelFileNode rnode, ForkNumber forknum)
 		 * will always empty the queue soon.
 		 */
 		while (!ForwardFsyncRequest(rnode, forknum, FORGET_RELATION_FSYNC, false))
+			pg_usleep(10000L);	/* 10 msec seems a good number */
+
+		/*
+		 * Note we don't wait for the checkpointer to actually absorb the
+		 * cancel message; see mdsync() for the implications.
+		 */
+	}
+}
+
+/*
+ * AOForgetRelationFsyncRequests -- forget any fsyncs for a relation fork
+ *
+ * forknum == InvalidForkNumber means all forks, although this code doesn't
+ * actually know that, since it's just forwarding the request elsewhere.
+ */
+void
+AOForgetRelationFsyncRequests(RelFileNode rnode)
+{
+	if (pendingOpsTable)
+	{
+		/* standalone backend or startup process: fsync state is local */
+		RememberFsyncRequest(rnode, MAIN_FORKNUM, FORGET_RELATION_FSYNC, true);
+	}
+	else if (IsUnderPostmaster)
+	{
+		/*
+		 * Notify the checkpointer about it.  If we fail to queue the cancel
+		 * message, we have to sleep and try again ... ugly, but hopefully
+		 * won't happen often.
+		 *
+		 * XXX should we CHECK_FOR_INTERRUPTS in this loop?  Escaping with an
+		 * error would leave the no-longer-used file still present on disk,
+		 * which would be bad, so I'm inclined to assume that the checkpointer
+		 * will always empty the queue soon.
+		 */
+		while (!ForwardFsyncRequest(rnode, MAIN_FORKNUM, FORGET_RELATION_FSYNC, true))
 			pg_usleep(10000L);	/* 10 msec seems a good number */
 
 		/*
