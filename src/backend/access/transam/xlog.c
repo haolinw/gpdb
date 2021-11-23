@@ -12864,7 +12864,7 @@ initialize_wal_bytes_written(void)
 void
 throttle_for_catchup(void)
 {
-	/* 
+	/*
 	 * initialize throttle_size to rep_lag_avoidance_threshold (or 1024) KB,
 	 * this is a sub-criteria to trigger throttle logic
 	 */
