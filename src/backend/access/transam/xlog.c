@@ -12343,7 +12343,7 @@ initialize_wal_bytes_written(void)
  * much, as well as to reduce the risk of data loss when generating
  * WALs too fast.
  */
-void
+static void
 throttle_for_catchup(void)
 {
 	/*
@@ -12359,6 +12359,10 @@ throttle_for_catchup(void)
 	XLogRecPtr cur_min_lsn;
 	int64_t orig_lag, cur_lag;
 
+	/*
+	 * We only throttle "large" WAL written size requests since they may likely
+	 * increase the lag fast, while "small" size requests may not.
+	 */
 	if (wal_bytes_written <= throttle_size || IS_QUERY_DISPATCHER())
 		return;
 
@@ -12370,14 +12374,12 @@ throttle_for_catchup(void)
 	 */
 	for (;;)
 	{
+		/* no throttle if not in catchup state */
+		if (!gp_is_mirror_catching_up())
+			return;
+
 		/* Throttle in serial for the large write workload. */
 		LWLockAcquire(WalCatchupThrottleLock, LW_EXCLUSIVE);
-
-		if (!gp_is_mirror_catching_up())
-		{
-			LWLockRelease(WalCatchupThrottleLock);
-			break;
-		}
 
 		cur_min_lsn = XLogGetReplicationSlotMinimumLSN();
 		cur_lag = GetFlushRecPtr() - cur_min_lsn;
@@ -12387,6 +12389,7 @@ throttle_for_catchup(void)
 		if (XLogRecPtrIsInvalid(cur_min_lsn))
 			break;
 		
+		/* initialize orig_min_lsn to the first valid cur_min_lsn */
 		if (XLogRecPtrIsInvalid(orig_min_lsn))
 		{
 			orig_min_lsn = cur_min_lsn;
@@ -12400,7 +12403,7 @@ throttle_for_catchup(void)
 		if (orig_lag - cur_lag >= 2 * throttle_size)
 			break;
 		
-		/* sleep for 5ms. */
+		/* sleep for 5ms and loop again */
 		pg_usleep(check_lag_interval);
 	}
 }

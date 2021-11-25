@@ -12,6 +12,7 @@
 #ifndef _WALSENDER_PRIVATE_H
 #define _WALSENDER_PRIVATE_H
 
+#include "port/atomics.h"
 #include "access/xlog.h"
 #include "nodes/nodes.h"
 #include "replication/syncrep.h"
@@ -89,6 +90,12 @@ typedef struct WalSnd
 	 * mirror in streaming mode
 	 */
 	bool 		is_for_gp_walreceiver;
+
+	/*
+	 * An atomic variable to combine walsender state with other indicators
+	 * to identify some state-aware situation.
+	 */
+	pg_atomic_uint32	state_value;
 } WalSnd;
 
 extern WalSnd *MyWalSnd;

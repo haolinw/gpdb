@@ -594,25 +594,18 @@ GetMirrorStatus(FtsResponse *response, bool *ready_for_syncrep)
  * Is the mirror catching up?
  */
 bool
-gp_is_mirror_catching_up()
+gp_is_mirror_catching_up(void)
 {
 	int			i;
+	uint32		stval;
 
 	for (i = 0; i < max_wal_senders; i++)
 	{
-		WalSnd *walsender = &WalSndCtl->walsnds[i];
+		volatile WalSnd *walsender = &WalSndCtl->walsnds[i];
 
-		SpinLockAcquire(&walsender->mutex);
-
-		if (walsender->is_for_gp_walreceiver &&
-			walsender->pid != 0 &&
-			walsender->state == WALSNDSTATE_CATCHUP)
-		{
-			SpinLockRelease(&walsender->mutex);
+		stval = pg_atomic_read_u32(&walsender->state_value);
+		if (stval == (uint32)WALSNDSTATE_CATCHUP)
 			return true;
-		}
-
-		SpinLockRelease(&walsender->mutex);
 	}
 
 	return false;
