@@ -2260,33 +2260,29 @@ appendonly_fetch(AppendOnlyFetchDesc aoFetchDesc,
 			segmentFileNum == aoFetchDesc->blockDirectory.currentSegmentFileNum &&
 			segmentFileNum == aoFetchDesc->executorReadBlock.segmentFileNum)
 		{
-			if (rowNum >= aoFetchDesc->currentBlock.firstRowNum &&
-				rowNum <= aoFetchDesc->currentBlock.lastRowNum &&
-				AppendOnlyBlockDirectoryEntry_RangeHasRow(
-														  &aoFetchDesc->currentBlock.blockDirectoryEntry,
-														  rowNum))
-			{
-				if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&aoFetchDesc->visibilityMap, aoTupleId))
-				{
-					if (slot != NULL)
-					{
-						ExecClearTuple(slot);
-					}
-					return false;	/* row has been deleted or updated. */
-				}
-				return fetchFromCurrentBlock(aoFetchDesc, rowNum, slot);
-			}
-
-			/*
-			 * Otherwise, if the current Block Directory entry covers the
-			 * request tuples, lets use its information as another performance
-			 * optimization.
-			 */
 			if (AppendOnlyBlockDirectoryEntry_RangeHasRow(
 														  &aoFetchDesc->currentBlock.blockDirectoryEntry,
 														  rowNum))
 			{
+				if (rowNum >= aoFetchDesc->currentBlock.firstRowNum &&
+					rowNum <= aoFetchDesc->currentBlock.lastRowNum)
+				{
+					if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&aoFetchDesc->visibilityMap, aoTupleId))
+					{
+						if (slot != NULL)
+						{
+							ExecClearTuple(slot);
+						}
+						return false;	/* row has been deleted or updated. */
+					}
+					return fetchFromCurrentBlock(aoFetchDesc, rowNum, slot);
+				}
+
 				/*
+				 * Otherwise, if the current Block Directory entry covers the
+				 * request tuples, lets use its information as another performance
+				 * optimization.
+				 * 
 				 * The tuple is covered by the current Block Directory entry,
 				 * but is it before or after our current block?
 				 */
@@ -2773,10 +2769,10 @@ aoInsertDesc->appendOnlyMetaDataSnapshot, //CONCERN:Safe to assume all block dir
  * - tuples inserted into varblocks, not via the postgresql buf/page manager.
  * - no need to pin buffers.
  *
-  * The header fields of *tup are updated to match the stored tuple;
-  *
-  * Unlike heap_insert(), this function doesn't scribble on the input tuple.
-  */
+ * The header fields of *tup are updated to match the stored tuple;
+ *
+ * Unlike heap_insert(), this function doesn't scribble on the input tuple.
+ */
 void
 appendonly_insert(AppendOnlyInsertDesc aoInsertDesc,
 				  MemTuple instup,
