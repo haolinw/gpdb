@@ -204,6 +204,7 @@ typedef struct AOCSFetchDescData
 
 	int				totalSegfiles;
 	struct AOCSFileSegInfo **segmentFileInfo;
+	Bitmapset			*targetsegs; /* flag to indicate target scanning segments */
 
 	/*
 	 * The largest row number of this aoseg. Maximum row number is required in

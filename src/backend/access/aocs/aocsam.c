@@ -502,7 +502,7 @@ aocs_beginscan(Relation relation,
 	else
 		aocsMetaDataSnapshot = SnapshotSelf;
 
-	seginfo = GetAllAOCSFileSegInfo(relation, aocsMetaDataSnapshot, &total_seg);
+	seginfo = GetAllAOCSFileSegInfo(relation, aocsMetaDataSnapshot, &total_seg, NULL);
 	return aocs_beginscan_internal(relation,
 								   seginfo,
 								   total_seg,
@@ -1352,13 +1352,22 @@ aocs_fetch_init(Relation relation,
                                  NULL);
 
 	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfo(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles);
+		GetAllAOCSFileSegInfo(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
 
-	/* Init the biggest row number of each aoseg */
-	for (segno = 0; segno < AOTupleId_MultiplierSegmentFileNum; ++segno)
+	Assert(bms_is_empty(aocsFetchDesc->targetsegs));
+
+	/* 
+	 * Initialize lastSequence only for segments which we got above is sufficient,
+	 * rather than all AOTupleId_MultiplierSegmentFileNum ones that introducing
+	 * too many unnecessary calls in most cases.
+	 */
+	for (int i = -1; i < aocsFetchDesc->totalSegfiles; i++)
 	{
-		aocsFetchDesc->lastSequence[segno] =
-			ReadLastSequence(aocsFetchDesc->segrelid, segno);
+		/* always initailize segment 0 */
+		segno = (i < 0 ? 0 : aocsFetchDesc->segmentFileInfo[i]->segno);
+		/* set corresponding bit for target segment */
+		aocsFetchDesc->targetsegs = bms_add_member(aocsFetchDesc->targetsegs, segno);
+		aocsFetchDesc->lastSequence[segno] = ReadLastSequence(aocsFetchDesc->segrelid, segno);
 	}
 
 	AppendOnlyBlockDirectory_Init_forSearch(
@@ -1455,6 +1464,15 @@ aocs_fetch(AOCSFetchDesc aocsFetchDesc,
 	bool		isSnapshotAny = (aocsFetchDesc->snapshot == SnapshotAny);
 
 	Assert(numCols > 0);
+
+	Assert(segmentFileNum >= 0);
+
+	/* Fail if segmentFileNum is out of the scanning scope. */
+	if (!bms_is_member(segmentFileNum, aocsFetchDesc->targetsegs))
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Segment file No. %d is out of the scanning scope for target relfilenode %u.",
+				 		segmentFileNum, aocsFetchDesc->relation->rd_node.relNode)));
 
 	/*
 	 * if the rowNum is bigger than lastsequence, skip it.
@@ -1664,6 +1682,9 @@ aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc)
 		pfree(aocsFetchDesc->segmentFileInfo);
 		aocsFetchDesc->segmentFileInfo = NULL;
 	}
+
+	bms_free(aocsFetchDesc->targetsegs);
+	aocsFetchDesc->targetsegs = NULL;
 
 	RelationDecrementReferenceCount(aocsFetchDesc->relation);
 

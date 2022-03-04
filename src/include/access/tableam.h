@@ -602,6 +602,8 @@ typedef struct TableAmRoutine
 	 */
 	bool		(*relation_needs_toast_table) (Relation rel);
 
+	int			(*relation_get_segnos) (Relation rel, Snapshot snapshot, int *segnos, void *extra);
+
 
 	/* ------------------------------------------------------------------------
 	 * Planner related functions.
@@ -1668,6 +1670,12 @@ static inline bool
 table_relation_needs_toast_table(Relation rel)
 {
 	return rel->rd_tableam->relation_needs_toast_table(rel);
+}
+
+static inline int
+table_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, void *extra)
+{
+	return rel->rd_tableam->relation_get_segnos(rel, snapshot, segnos, extra);
 }
 
 

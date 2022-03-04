@@ -302,6 +302,7 @@ typedef struct AppendOnlyFetchDescData
 
 	int				totalSegfiles;
 	FileSegInfo 	**segmentFileInfo;
+	Bitmapset		*targetsegs; /* flag to indicate target scanning segments */
 
 	char			*segmentFileName;
 	int				segmentFileNameMaxLen;

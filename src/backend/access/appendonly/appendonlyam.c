@@ -1678,7 +1678,7 @@ appendonly_beginscan(Relation relation,
 	 * Get the pg_appendonly information for this table
 	 */
 	seginfo = GetAllFileSegInfo(relation,
-								appendOnlyMetaDataSnapshot, &segfile_count);
+								appendOnlyMetaDataSnapshot, &segfile_count, NULL);
 
 	aoscan = appendonly_beginrangescan_internal(relation,
 												snapshot,
@@ -2154,9 +2154,22 @@ appendonly_fetch_init(Relation relation,
 		GetAllFileSegInfo(
 						  relation,
 						  appendOnlyMetaDataSnapshot,
-						  &aoFetchDesc->totalSegfiles);
-	for (segno = 0; segno < AOTupleId_MultiplierSegmentFileNum; ++segno)
+						  &aoFetchDesc->totalSegfiles,
+						  NULL);
+
+	Assert(bms_is_empty(aoFetchDesc->targetsegs));
+
+	/* 
+	 * Initialize lastSequence only for segments which we got above is sufficient,
+	 * rather than all AOTupleId_MultiplierSegmentFileNum ones that introducing
+	 * too many unnecessary calls in most cases.
+	 */
+	for (int i = -1; i < aoFetchDesc->totalSegfiles; i++)
 	{
+		/* always initailize segment 0 */
+		segno = (i < 0 ? 0 : aoFetchDesc->segmentFileInfo[i]->segno);
+		/* set corresponding bit for target segment */
+		aoFetchDesc->targetsegs = bms_add_member(aoFetchDesc->targetsegs, segno);
 		aoFetchDesc->lastSequence[segno] = ReadLastSequence(aoFormData.segrelid, segno);
 	}
 
@@ -2231,6 +2244,15 @@ appendonly_fetch(AppendOnlyFetchDesc aoFetchDesc,
 	int			segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64		rowNum = AOTupleIdGet_rowNum(aoTupleId);
 	bool		isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
+
+	Assert(segmentFileNum >= 0);
+
+	/* Fail if segmentFileNum is out of the scanning scope. */
+	if (!bms_is_member(segmentFileNum, aoFetchDesc->targetsegs))
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Segment file No. %d is out of the scanning scope for target relfilenode %u.",
+				 		segmentFileNum, aoFetchDesc->relation->rd_node.relNode)));
 
 	/*
 	 * This is an improvement for brin. BRIN index stores ranges of TIDs in
@@ -2450,6 +2472,9 @@ appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 		pfree(aoFetchDesc->segmentFileInfo);
 		aoFetchDesc->segmentFileInfo = NULL;
 	}
+
+	bms_free(aoFetchDesc->targetsegs);
+	aoFetchDesc->targetsegs = NULL;
 
 	AppendOnlyVisimap_Finish(&aoFetchDesc->visibilityMap, AccessShareLock);
 

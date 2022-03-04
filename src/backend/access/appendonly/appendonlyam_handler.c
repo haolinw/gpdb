@@ -1735,6 +1735,33 @@ appendonly_relation_needs_toast_table(Relation rel)
 	return (tuple_length > TOAST_TUPLE_THRESHOLD);
 }
 
+static int
+appendonly_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, void *extra)
+{
+	int nsegs = 0;
+	FileSegInfo **seginfos;
+
+	Assert(rel != NULL);
+
+	if (segnos != NULL)
+	{
+		seginfos = GetAllFileSegInfo(rel, snapshot, &nsegs, (Oid *)extra);
+
+		Assert(nsegs <= AOTupleId_MaxSegmentFileNum);
+
+		for (int i = 0; i < nsegs; i++)
+			segnos[i] = seginfos[i]->segno;
+
+		if (seginfos != NULL)
+		{
+			FreeAllSegFileInfo(seginfos, nsegs);
+			pfree(seginfos);
+		}
+	}
+
+	return nsegs;
+}
+
 /* ------------------------------------------------------------------------
  * Planner related callbacks for the appendonly AM
  * ------------------------------------------------------------------------
@@ -1965,6 +1992,7 @@ static const TableAmRoutine ao_row_methods = {
 	.relation_needs_toast_table = appendonly_relation_needs_toast_table,
 
 	.relation_estimate_size = appendonly_estimate_rel_size,
+	.relation_get_segnos = appendonly_relation_get_segnos,
 
 	.scan_bitmap_next_block = appendonly_scan_bitmap_next_block,
 	.scan_bitmap_next_tuple = appendonly_scan_bitmap_next_tuple,

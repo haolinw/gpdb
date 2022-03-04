@@ -395,6 +395,7 @@ bringetbitmap(IndexScanDesc scan, Node **bmNodeP)
 	int			segno;
 	BlockNumber seg_start_blk;
 	int64		lastSequence;
+	int			segnos[AOTupleId_MaxSegmentFileNum] = {0};
 
 	opaque = (BrinOpaque *) scan->opaque;
 	bdesc = opaque->bo_bdesc;
@@ -432,11 +433,14 @@ bringetbitmap(IndexScanDesc scan, Node **bmNodeP)
 	{
 		Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
 		Oid			segrelid;
+		int			nsegs;
 
-		GetAppendOnlyEntryAuxOids(heapRel->rd_id, NULL, &segrelid, NULL, NULL, NULL, NULL);
-
-		for (segno = 0; segno < AOTupleId_MaxSegmentFileNum; ++segno)
+		/* call ReadLastSequence() only for segnos corresponding to the target relation */
+		nsegs = table_relation_get_segnos(heapRel, appendOnlyMetaDataSnapshot, segnos, (void *)&segrelid);
+		for (int i = -1; i < nsegs; i++)
 		{
+			/* always initailize segment 0 */
+			segno = (i < 0 ? 0 : segnos[i]);
 			lastSequence = ReadLastSequence(segrelid, segno);
 
 			seg_start_blk = segnoGetCurrentAosegStart(segno);
@@ -1410,11 +1414,12 @@ brinsummarize(Relation index, Relation heapRel, BlockNumber pageRange,
 	BlockNumber heapNumBlocks = 0;
 	BlockNumber pagesPerRange;
 	BlockNumber startBlk;
-	BlockNumber aoBlocks[AOTupleId_MaxSegmentFileNum];
+	BlockNumber aoBlocks[AOTupleId_MaxSegmentFileNum] = {0};
 	Buffer		buf;
 	int			segno;
 	BlockNumber seg_start_blk;
 	int64		lastSequence;
+	int			segnos[AOTupleId_MaxSegmentFileNum] = {0};
 
 	revmap = brinRevmapInitialize(index, &pagesPerRange, NULL);
 
@@ -1428,11 +1433,14 @@ brinsummarize(Relation index, Relation heapRel, BlockNumber pageRange,
 	{
 		Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
 		Oid			segrelid;
+		int			nsegs;
 
-		GetAppendOnlyEntryAuxOids(heapRel->rd_id, NULL, &segrelid, NULL, NULL, NULL, NULL);
-
-		for (segno = 0; segno < AOTupleId_MaxSegmentFileNum; ++segno)
+		/* call ReadLastSequence() only for segnos corresponding to the target relation */
+		nsegs = table_relation_get_segnos(heapRel, appendOnlyMetaDataSnapshot, segnos, (void *)&segrelid);
+		for (int i = -1; i < nsegs; i++)
 		{
+			/* always initailize segment 0 */
+			segno = (i < 0 ? 0 : segnos[i]);
 			lastSequence = ReadLastSequence(segrelid, segno);
 
 			seg_start_blk = segnoGetCurrentAosegStart(segno);

@@ -1647,7 +1647,7 @@ aoco_relation_size(Relation rel, ForkNumber forkNumber)
 		return totalbytes;
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	allseg = GetAllAOCSFileSegInfo(rel, snapshot, &totalseg);
+	allseg = GetAllAOCSFileSegInfo(rel, snapshot, &totalseg, NULL);
 	for (int seg = 0; seg < totalseg; seg++)
 	{
 		for (int attr = 0; attr < RelationGetNumberOfAttributes(rel); attr++)
@@ -1687,6 +1687,33 @@ aoco_relation_needs_toast_table(Relation rel)
 	 * Greenplum 7
 	 */
 	return false;
+}
+
+static int
+aoco_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, void *extra)
+{
+	int nsegs = 0;
+	AOCSFileSegInfo **seginfos;
+
+	Assert(rel != NULL);
+
+	if (segnos != NULL)
+	{
+		seginfos = GetAllAOCSFileSegInfo(rel, snapshot, &nsegs, (Oid *)extra);
+
+		Assert(nsegs <= AOTupleId_MaxSegmentFileNum);
+
+		for (int i = 0; i < nsegs; i++)
+			segnos[i] = seginfos[i]->segno;
+
+		if (seginfos != NULL)
+		{
+			FreeAllAOCSSegFileInfo(seginfos, nsegs);
+			pfree(seginfos);
+		}
+	}
+
+	return nsegs;
 }
 
 
@@ -1936,6 +1963,7 @@ static const TableAmRoutine ao_column_methods = {
 	.relation_needs_toast_table = aoco_relation_needs_toast_table,
 
 	.relation_estimate_size = aoco_estimate_rel_size,
+	.relation_get_segnos = aoco_relation_get_segnos,
 
 	.scan_bitmap_next_block = aoco_scan_bitmap_next_block,
 	.scan_bitmap_next_tuple = aoco_scan_bitmap_next_tuple,

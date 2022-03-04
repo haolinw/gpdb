@@ -2080,6 +2080,15 @@ heapam_relation_needs_toast_table(Relation rel)
 	return (tuple_length > TOAST_TUPLE_THRESHOLD);
 }
 
+static int
+heapam_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, void *extra)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("feature not supported on heap relations")));
+	return 0;
+}
+
 
 /* ------------------------------------------------------------------------
  * Planner related callbacks for the heap AM
@@ -2665,6 +2674,7 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_size = heapam_relation_size,
 	.relation_needs_toast_table = heapam_relation_needs_toast_table,
+	.relation_get_segnos = heapam_relation_get_segnos,
 
 	.relation_estimate_size = heapam_estimate_rel_size,
 
