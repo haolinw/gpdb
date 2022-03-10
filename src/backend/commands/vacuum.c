@@ -2338,6 +2338,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	else if (ao_vacuum_phase == VACOPT_AO_POST_CLEANUP_PHASE)
 	{
 		ao_vacuum_rel_post_cleanup(onerel, params->options, params, vac_strategy, dropped_segs);
+		/* dropped_segs is freed in ao_vacuum_rel_post_cleanup() */
+		dropped_segs = NULL;
 	}
 	else if (is_appendoptimized)
 	{

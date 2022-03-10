@@ -497,8 +497,8 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
  * available. If it's not, no segments are dropped.
  *
  */
-Bitmapset *
-AppendOnlyRecycleDeadSegments(Relation aorel)
+void
+AppendOnlyRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 {
 	Relation	pg_aoseg_rel;
 	TupleDesc	pg_aoseg_dsc;
@@ -508,9 +508,13 @@ AppendOnlyRecycleDeadSegments(Relation aorel)
 	bool		got_accessexclusive_lock = false;
 	TransactionId cutoff_xid = InvalidTransactionId;
 	Oid			segrelid;
-	Bitmapset	*dropped_segs = NULL;
 
 	Assert(RelationIsAppendOptimized(aorel));
+
+	if (dropped_segs != NULL)
+	{
+		*dropped_segs = NULL;
+	}
 
 	/*
 	 * The algorithm below for choosing a target segment is not concurrent-safe.
@@ -616,7 +620,10 @@ AppendOnlyRecycleDeadSegments(Relation aorel)
 			ClearAOCSFileSegInfo(aorel, segno);
 		}
 
-		dropped_segs = bms_add_member(dropped_segs, segno);
+		if (dropped_segs != NULL)
+		{
+			*dropped_segs = bms_add_member(*dropped_segs, segno);
+		}
 	}
 	systable_endscan(aoscan);
 
@@ -625,8 +632,6 @@ AppendOnlyRecycleDeadSegments(Relation aorel)
 	heap_close(pg_aoseg_rel, AccessShareLock);
 
 	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
-
-	return dropped_segs;
 }
 
 /*

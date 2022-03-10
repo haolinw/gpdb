@@ -152,6 +152,7 @@ typedef struct AppendOnlyIndexVacuumState
 } AppendOnlyIndexVacuumState;
 
 static void vacuum_appendonly_index(Relation indexRelation,
+									double rel_tuple_count,
 									Bitmapset *dropped_seg,
 									int elevel,
 									BufferAccessStrategy bstrategy);
@@ -205,7 +206,7 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, int options, VacuumParams *params,
 					get_namespace_name(RelationGetNamespace(onerel)),
 					relname)));
 
-	dropped_segs = AppendOnlyRecycleDeadSegments(onerel);
+	AppendOnlyRecycleDeadSegments(onerel, &dropped_segs);
 
 	/*
 	 * Also truncate all live segments to the EOF values stored in pg_aoseg.
@@ -219,7 +220,7 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, int options, VacuumParams *params,
 
 void
 ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
-						   BufferAccessStrategy bstrategy, Bitmapset *dropped_segs)
+						   BufferAccessStrategy bstrategy, Bitmapset *pre_dropped_segs)
 {
 	BlockNumber	relpages;
 	double		reltuples;
@@ -251,13 +252,13 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	new_dropped_segs = AppendOnlyRecycleDeadSegments(onerel);
+	AppendOnlyRecycleDeadSegments(onerel, &new_dropped_segs);
 
-	all_dropped_segs = bms_union(dropped_segs, new_dropped_segs);
+	all_dropped_segs = bms_union(pre_dropped_segs, new_dropped_segs);
 
 	vacuum_appendonly_indexes(onerel, options, all_dropped_segs, bstrategy);
 
-	bms_free(dropped_segs);
+	bms_free(pre_dropped_segs);
 	bms_free(new_dropped_segs);
 	bms_free(all_dropped_segs);
 
@@ -393,15 +394,8 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 	int			i;
 	Relation   *Irel;
 	int			nindexes;
-	int elevel;
-
-	if (options & VACOPT_VERBOSE)
-		elevel = INFO;
-	else
-		elevel = DEBUG2;
 
 	Assert(RelationIsAppendOptimized(aoRelation));
-
 
 	if (Debug_appendonly_print_compaction)
 		elog(LOG, "Vacuum indexes for append-only relation %s",
@@ -416,10 +410,19 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 	/* Clean/scan index relation(s) */
 	if (Irel != NULL)
 	{
+		int elevel;
+
+		if (options & VACOPT_VERBOSE)
+			elevel = INFO;
+		else
+			elevel = DEBUG2;
+
+		/* just scan indexes to update statistic */
 		if (Gp_role == GP_ROLE_DISPATCH || bms_is_empty(dropped_segs))
 		{
 			for (i = 0; i < nindexes; i++)
 			{
+				/* TODO: Irel[i]->rd_rel->reltuples same as heap ? */
 				scan_index(Irel[i], Irel[i]->rd_rel->reltuples, elevel, bstrategy);
 			}
 		}
@@ -428,6 +431,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 			for (i = 0; i < nindexes; i++)
 			{
 				vacuum_appendonly_index(Irel[i],
+										Irel[i]->rd_rel->reltuples, /* TODO: right ? */
 										dropped_segs,
 										elevel,
 										bstrategy);
@@ -448,6 +452,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
  */
 static void
 vacuum_appendonly_index(Relation indexRelation,
+						double rel_tuple_count,
 						Bitmapset *dropped_seg,
 						int elevel,
 						BufferAccessStrategy bstrategy)
@@ -462,11 +467,12 @@ vacuum_appendonly_index(Relation indexRelation,
 
 	ivinfo.index = indexRelation;
 	ivinfo.message_level = elevel;
+	ivinfo.num_heap_tuples = rel_tuple_count;
 	ivinfo.strategy = bstrategy;
 
 	/* Do bulk deletion */
 	stats = index_bulk_delete(&ivinfo, NULL, appendonly_tid_reaped,
-							  dropped_seg);
+							  (void *) dropped_seg);
 
 	/* Do post-VACUUM cleanup */
 	stats = index_vacuum_cleanup(&ivinfo, stats);
@@ -503,7 +509,6 @@ vacuum_appendonly_index(Relation indexRelation,
 	pfree(stats);
 }
 
-
 /*
  * appendonly_tid_reaped()
  *
@@ -523,7 +528,6 @@ appendonly_tid_reaped(ItemPointer itemptr, void *state)
 
 	return bms_is_member(segno, dropped_segs);
 }
-
 
 /*
  * Fills in the relation statistics for an append-only relation.
@@ -615,7 +619,7 @@ scan_index(Relation indrel, double num_tuples,
 
 	ivinfo.index = indrel;
 	ivinfo.analyze_only = false;
-	ivinfo.estimated_count = true;
+	ivinfo.estimated_count = false; /* TODO: need to verify */
 	ivinfo.message_level = elevel;
 	ivinfo.num_heap_tuples = num_tuples;
 	ivinfo.strategy = vac_strategy;
