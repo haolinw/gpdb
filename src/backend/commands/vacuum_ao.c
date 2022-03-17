@@ -163,7 +163,7 @@ static void vacuum_appendonly_fill_stats(Relation aorel, Snapshot snapshot, int 
 										 BlockNumber *rel_pages, double *rel_tuples,
 										 bool *relhasindex);
 static int vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_segnos,
-									 BufferAccessStrategy bstrategy);
+									 BufferAccessStrategy bstrategy, double reltuples);
 
 
 /*
@@ -252,16 +252,6 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	AppendOptimizedRecycleDeadSegments(onerel, &new_dropped_segs);
-
-	all_dropped_segs = bms_union(pre_dropped_segs, new_dropped_segs);
-
-	vacuum_appendonly_indexes(onerel, options, all_dropped_segs, bstrategy);
-
-	bms_free(pre_dropped_segs);
-	bms_free(new_dropped_segs);
-	bms_free(all_dropped_segs);
-
 	/* Update statistics in pg_class */
 	vacuum_appendonly_fill_stats(onerel, GetActiveSnapshot(),
 								 elevel,
@@ -287,6 +277,16 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 						MultiXactCutoff,
 						false,
 						true /* isvacuum */);
+
+	AppendOnlyRecycleDeadSegments(onerel, &new_dropped_segs);
+
+	all_dropped_segs = bms_union(pre_dropped_segs, new_dropped_segs);
+
+	vacuum_appendonly_indexes(onerel, options, all_dropped_segs, bstrategy, reltuples);
+
+	bms_free(pre_dropped_segs);
+	bms_free(new_dropped_segs);
+	bms_free(all_dropped_segs);
 }
 
 void
@@ -415,8 +415,8 @@ ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy
  * It returns the number of indexes on the relation.
  */
 static int
-vacuum_appendonly_indexes(Relation aoRelation, int options,
-						  Bitmapset *dropped_segs, BufferAccessStrategy bstrategy)
+vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_segs,
+						  BufferAccessStrategy bstrategy, double reltuples)
 {
 	int			i;
 	Relation   *Irel;
@@ -449,8 +449,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 		{
 			for (i = 0; i < nindexes; i++)
 			{
-				/* TODO: Irel[i]->rd_rel->reltuples same as heap ? */
-				scan_index(Irel[i], Irel[i]->rd_rel->reltuples, elevel, bstrategy);
+				scan_index(Irel[i], reltuples, elevel, bstrategy);
 			}
 		}
 		else
@@ -458,7 +457,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 			for (i = 0; i < nindexes; i++)
 			{
 				vacuum_appendonly_index(Irel[i],
-										Irel[i]->rd_rel->reltuples, /* TODO: right ? */
+										reltuples,
 										dropped_segs,
 										elevel,
 										bstrategy);
@@ -646,7 +645,7 @@ scan_index(Relation indrel, double num_tuples,
 
 	ivinfo.index = indrel;
 	ivinfo.analyze_only = false;
-	ivinfo.estimated_count = false; /* TODO: need to verify */
+	ivinfo.estimated_count = false;
 	ivinfo.message_level = elevel;
 	ivinfo.num_heap_tuples = num_tuples;
 	ivinfo.strategy = vac_strategy;
