@@ -512,9 +512,7 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 	Assert(RelationIsAppendOptimized(aorel));
 
 	if (dropped_segs != NULL)
-	{
 		*dropped_segs = NULL;
-	}
 
 	/*
 	 * The algorithm below for choosing a target segment is not concurrent-safe.
@@ -621,9 +619,7 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 		}
 
 		if (dropped_segs != NULL)
-		{
 			*dropped_segs = bms_add_member(*dropped_segs, segno);
-		}
 	}
 	systable_endscan(aoscan);
 
