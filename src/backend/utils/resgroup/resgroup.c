@@ -1152,7 +1152,7 @@ ResGroupDumpMemoryInfo(void)
  * in such a case waiverUsed is marked as true.
  */
 bool
-ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
+ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, int32 *rgUsedWaivedChunks, bool *waiverUsed)
 {
 	int32				overuseMem;
 	ResGroupSlotData	*slot = self->slot;
@@ -1224,6 +1224,7 @@ ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed)
 		{
 			/* the over usage is within the allowed threshold */
 			*waiverUsed = true;
+			*rgUsedWaivedChunks = overuseMem;
 		}
 	}
 
@@ -1386,7 +1387,10 @@ bindGroupOperation(ResGroupData *group)
 /*
  * Add chunks into group and slot memory usage.
  *
- * Return the total over used chunks of global share
+ * Return the extra chunks need to reserve from other places, it
+ * depeneds on implementation. For now, we borrow those chunks
+ * from waived chunks, which currently used to process error messages
+ * only. Note that, every QE has its own waived chunks.
  */
 static int32
 groupIncMemUsage(ResGroupData *group, ResGroupSlotData *slot, int32 chunks)
@@ -1395,6 +1399,7 @@ groupIncMemUsage(ResGroupData *group, ResGroupSlotData *slot, int32 chunks)
 	int32			sharedMemUsage;	/* the total shared memory usage,
 										sum of group share and global share */
 	int32			globalOveruse = 0;	/* the total over used chunks of global share*/
+	int32			extraChunksNeed = 0;	/* extra chunks need to reserve from waivedChunks */
 
 	/* Add the chunks to memUsage in slot */
 	slotMemUsage = pg_atomic_add_fetch_u32((pg_atomic_uint32 *) &slot->memUsage,
@@ -1423,13 +1428,14 @@ groupIncMemUsage(ResGroupData *group, ResGroupSlotData *slot, int32 chunks)
 													  deltaGlobalSharedMemUsage);
 		/* calculate the total over used chunks of global share */
 		globalOveruse = Max(0, 0 - newFreeChunks);
+		extraChunksNeed = Min(deltaGlobalSharedMemUsage, globalOveruse);
 	}
 
 	/* Add the chunks to memUsage in group */
 	pg_atomic_add_fetch_u32((pg_atomic_uint32 *) &group->memUsage,
 							chunks);
 
-	return globalOveruse;
+	return extraChunksNeed;
 }
 
 /*
@@ -1560,6 +1566,15 @@ selfAttachResGroup(ResGroupData *group, ResGroupSlotData *slot)
 
 	groupIncMemUsage(group, slot, self->memUsage);
 	pg_atomic_add_fetch_u32((pg_atomic_uint32*) &slot->nProcs, 1);
+
+#ifdef FAULT_INJECTOR
+	if (SIMPLE_FAULT_INJECTOR("resgroup_set_mem_chunks") == FaultInjectorTypeSkip)
+	{
+		slot->memUsage = slot->memQuota;
+		group->memSharedUsage = group->memSharedGranted;
+		pg_atomic_init_u32(&pResGroupControl->freeChunks, -1);;
+	}
+#endif
 }
 
 

@@ -78,4 +78,8 @@ extern void IdleTracker_ActivateProcess(void);
 extern void IdleTracker_DeactivateProcess(void);
 extern bool VmemTrackerIsActivated(void);
 
+#ifdef FAULT_INJECTOR
+extern void VmemTracker_SetTrackedBytes(int32 newTrackedBytes);
+#endif
+
 #endif   /* VMEMTRACKER_H */

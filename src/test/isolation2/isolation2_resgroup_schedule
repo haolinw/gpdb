@@ -39,6 +39,9 @@ test: resgroup/resgroup_move_query
 #test: resgroup/resgroup_memory_sort_spill
 #test: resgroup/resgroup_memory_spilltodisk
 
+# test resource group elog oom
+test: resgroup/resgroup_oom_elog
+
 # regression tests
 test: resgroup/resgroup_recreate
 test: resgroup/resgroup_operator_memory

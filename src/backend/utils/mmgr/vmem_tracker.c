@@ -24,6 +24,7 @@
 #include "miscadmin.h"
 #include "port/atomics.h"
 #include "utils/guc.h"
+#include "utils/faultinjector.h"
 #include "utils/vmem_tracker.h"
 #include "utils/resource_manager.h"
 #include "utils/session_state.h"
@@ -76,6 +77,11 @@ static int32 maxChunksPerQuery = 0;
  * handling)
  */
 static int32 waivedChunks = 0;
+
+/*
+ * The number of waived chunks used by current QE process.
+ */
+static int32 usedWaivedChunks = 0;
 
 /*
  * Consumed vmem on the segment.
@@ -214,8 +220,9 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	Assert(MemoryProtection_IsOwnerThread());
 
 	bool waiverUsed = false;
+	int32 requestWaivedChunks = 0;
 
-	if (!ResGroupReserveMemory(numChunksToReserve, waivedChunks, &waiverUsed))
+	if (!ResGroupReserveMemory(numChunksToReserve, waivedChunks - usedWaivedChunks, &requestWaivedChunks, &waiverUsed))
 	{
 		pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
 		return MemoryFailure_ResourceGroupMemoryExhausted;
@@ -254,7 +261,22 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 	if (new_vmem > vmemLimitChunks &&
 			Gp_role == GP_ROLE_EXECUTE && CritSectionCount == 0)
 	{
-		if (new_vmem > vmemLimitChunks + waivedChunks)
+		int32 extraChunksNeed = Min(new_vmem - vmemLimitChunks, numChunksToReserve);
+
+		/*
+ 		 * If current reserve exceeds vmem limit of the segment, see if the QE process
+ 		 * has sufficient waivedChunks remained, reserve the extra chunks from it.
+		 */
+		if (waivedChunks > 0 && usedWaivedChunks + extraChunksNeed <= waivedChunks)
+		{
+			/*
+			 * If a resource group also reserved some chunks from available
+			 * waivedChunks, we should update the requestWaivedChunks with the
+			 * larger one needs to reserve.
+			 */
+			requestWaivedChunks = Max(extraChunksNeed, requestWaivedChunks);
+		}
+		else
 		{
 			/* Revert query memory reservation */
 			pg_atomic_sub_fetch_u32((pg_atomic_uint32 *)&MySessionState->sessionVmem, numChunksToReserve);
@@ -273,13 +295,18 @@ VmemTracker_ReserveVmemChunks(int32 numChunksToReserve)
 
 	maxVmemChunksTracked = Max(maxVmemChunksTracked, trackedVmemChunks);
 
-	if (waivedChunks > 0 && !waiverUsed)
+	if (waiverUsed)
+	{
+		usedWaivedChunks += requestWaivedChunks;
+	}
+	else if (waivedChunks > 0 && !waiverUsed)
 	{
 		/*
 		 * We have sufficient free memory that we are no longer using the waiver.
 		 * Therefore reset the waiver.
 		 */
 		waivedChunks = 0;
+		usedWaivedChunks = 0;
 	}
 
 	return MemoryAllocation_Success;
@@ -303,6 +330,13 @@ VmemTracker_ReleaseVmemChunks(int reduction)
 	ResGroupReleaseMemory(reduction);
 	Assert(0 <= MySessionState->sessionVmem);
 	trackedVmemChunks -= reduction;
+	/* We are releasing the chunks allocated from waivedChunks */
+	if (waivedChunks > 0 && usedWaivedChunks > 0)
+	{
+		usedWaivedChunks -= reduction;
+		if (usedWaivedChunks < 0)
+			usedWaivedChunks = 0;
+	}
 }
 
 /*
@@ -512,6 +546,20 @@ VmemTracker_GetAvailableQueryVmemMB()
 	return CHUNKS_TO_MB(VmemTracker_GetNonNegativeAvailableQueryChunks());
 }
 
+#ifdef FAULT_INJECTOR
+/*
+ * Set the trackedBytes for current QE process.
+ *
+ * Note that, currently, this function is only used for fault injection
+ * in isolation2 test case.
+ */
+void
+VmemTracker_SetTrackedBytes(int32 newTrackedBytes)
+{
+	trackedBytes = newTrackedBytes;
+}
+#endif
+
 /*
  * Reserve newly_requested bytes from the vmem system.
  *
@@ -655,6 +703,19 @@ VmemTracker_RegisterStartupMemory(int64 bytes)
 	startupChunks = BYTES_TO_CHUNKS(bytes + chunkSizeInBytes - 1);
 	startupBytes = CHUNKS_TO_BYTES(startupChunks);
 
+#ifdef FAULT_INJECTOR
+	/*
+	 * A fault injection to set startupChunks, so that the QE process will
+	 * consume all available vmem chunks, and also the waived chunks that
+	 * will be used for error handling.
+	 */
+	if (SIMPLE_FAULT_INJECTOR("vmem_oom_set_startup_chunks") == FaultInjectorTypeSkip)
+	{
+		startupChunks =  VmemTracker_GetVmemLimitChunks() - *segmentVmemChunks + 1;
+		startupBytes = CHUNKS_TO_BYTES(startupChunks);
+	}
+#endif
+
 	/*
 	 * Step 1, add the startup memory forcefully as these memory were already
 	 * in-use before the call to this function.
@@ -672,6 +733,8 @@ VmemTracker_RegisterStartupMemory(int64 bytes)
 
 	pg_atomic_add_fetch_u32((pg_atomic_uint32 *) segmentVmemChunks,
 							startupChunks);
+
+	SIMPLE_FAULT_INJECTOR("vmem_oom_startup");
 
 	/*
 	 * Step 2, check if an OOM error should be raised by allocating 0 chunk.
@@ -737,6 +800,7 @@ void
 VmemTracker_ResetWaiver(void)
 {
 	waivedChunks = 0;
+	usedWaivedChunks = 0;
 }
 
 bool

@@ -176,7 +176,7 @@ extern Datum ResGroupGetStat(Oid groupId, ResGroupStatType type);
 extern void ResGroupDumpMemoryInfo(void);
 
 /* Check the memory limit of resource group */
-extern bool ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, bool *waiverUsed);
+extern bool ResGroupReserveMemory(int32 memoryChunks, int32 overuseChunks, int32 *rgUsedWaivedChunks, bool *waiverUsed);
 /* Update the memory usage of resource group */
 extern void ResGroupReleaseMemory(int32 memoryChunks);
 

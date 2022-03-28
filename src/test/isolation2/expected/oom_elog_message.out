@@ -1,0 +1,160 @@
+-- This case tests OOM when writting elog messages into server log files.
+-- - First, we manually set currently used memory 'segmentVmemChunks' to
+-- - 'gp_vmem_protect_limit + waivedChunks' in a QE session, then issue
+-- - another session which will also request some memory chunks. However,
+-- - since we used out all of the memory chunks, it will throw OOM error, when
+-- - writting error messages into server logs, it may also request some
+-- - extra memory chunks, but under previouse reserving memory logic,
+-- - OOM error will be raised again and again..., until abort or panic.
+
+-- start_matchsubs
+--
+-- m/DETAIL:  Per-query memory limit reached: current limit is \d+ kB, requested \d+ bytes, has \d+ MB available for this query/
+-- s/\d+/XXX/g
+--
+-- m/DETAIL:  Vmem limit reached, failed to allocate \d+ bytes from tracker, which has \d+ MB available/
+-- s/\d+/XXX/g
+--
+-- m/DETAIL:  System memory limit reached, failed to allocate \d+ bytes from system/
+-- s/\d+/XXX/g
+--
+-- m/(seg\d+ \d+.\d+.\d+.\d+:\d+)/
+-- s/(.*)/(seg<ID> IP:PORT)/
+--
+-- end_matchsubs
+
+-- Set the gp_log_format to text format, which will call palloc when writting
+-- error log message to server log files.
+-- start_ignore
+!\retcode gpconfig -c gp_log_format -v text;
+-- start_ignore
+20220324:16:25:48:079579 gpconfig:chenwen-gpdb-test011158187228:gpuser-[INFO]:-completed successfully with parameters '-c gp_log_format -v text'
+
+-- end_ignore
+(exited with code 0)
+!\retcode gpstop -ari;
+-- start_ignore
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Starting gpstop with args: -ari
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Gathering information and validating the environment...
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Obtaining Greenplum Coordinator catalog information
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Obtaining Segment details from coordinator...
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Greenplum Version: 'postgres (Greenplum Database) 7.0.0-alpha.0+dev.15182.gd4a2c6d3cf build dev'
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing Coordinator instance shutdown with mode='immediate'
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Coordinator segment instance directory=/home/gpuser/gpdb/gpAux/gpdemo/datadirs/qddir/demoDataDir-1
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Attempting forceful termination of any leftover coordinator process
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Terminating processes for segment /home/gpuser/gpdb/gpAux/gpdemo/datadirs/qddir/demoDataDir-1
+20220324:16:25:48:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Stopping coordinator standby host chenwen-gpdb-test011158187228.na62 mode=immediate
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Successfully shutdown standby process on chenwen-gpdb-test011158187228.na62
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Targeting dbid [2, 5, 3, 6, 4, 7] for shutdown
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing parallel primary segment instance shutdown, please wait...
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-0.00% of jobs completed
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-100.00% of jobs completed
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing parallel mirror segment instance shutdown, please wait...
+20220324:16:25:49:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-0.00% of jobs completed
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-100.00% of jobs completed
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-----------------------------------------------------
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-   Segments stopped successfully      = 6
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-   Segments with errors during stop   = 0
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-----------------------------------------------------
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Successfully shutdown 6 of 6 segment instances 
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Database successfully shutdown with no errors reported
+20220324:16:25:50:079969 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Restarting System...
+
+-- end_ignore
+(exited with code 0)
+-- end_ignore
+
+1: create table test_vmem_tbl(c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int, c10 int);
+CREATE
+2: select gp_inject_fault_infinite('vmem_oom_set_startup_chunks', 'skip', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+2: select gp_inject_fault_infinite('vmem_oom_startup', 'suspend', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+2&: select gp_wait_until_triggered_fault('vmem_oom_startup', 1, dbid) from gp_segment_configuration where content =0 and role = 'p';  <waiting ...>
+-- The QE session will used out all of the segment's vitual memory, including waivedChunks
+3&: set gp_vmem_idle_resource_timeout to '1h';  <waiting ...>
+2<:  <... completed>
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+-- Issue a query with very long sql plain text, so that it will call palloc to request memory chunk when
+-- writting the statement's text to the server log files
+2: select gp_inject_fault_infinite('vmem_oom_set_tracked_bytes', 'skip', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+1: select temp_t3.c1, temp_t3.c2, temp_t3.c3, temp_t3.c4, temp_t3.c5, temp_t3.c6, temp_t3.c7, temp_t3.c8, temp_t3.c9, temp_t3.c10, temp_t3.c1+temp_t3.c2, temp_t3.c2+temp_t3.c3, temp_t3.c3+temp_t3.c4, temp_t3.c4+temp_t3.c5, temp_t3.c6+temp_t3.c7, temp_t3.c7+temp_t3.c8, temp_t3.c9+temp_t3.c10 from (select temp_t2.c1, temp_t2.c2, temp_t2.c3, temp_t2.c4, temp_t2.c5, temp_t2.c6, temp_t2.c7, temp_t2.c8, temp_t2.c9, temp_t2.c10, temp_t2.c1+temp_t2.c2, temp_t2.c2+temp_t2.c3, temp_t2.c3+temp_t2.c4, temp_t2.c4+temp_t2.c5, temp_t2.c6+temp_t2.c7, temp_t2.c7+temp_t2.c8, temp_t2.c9+temp_t2.c10 from (select temp_t1.c1, temp_t1.c2, temp_t1.c3, temp_t1.c4, temp_t1.c5, temp_t1.c6, temp_t1.c7, temp_t1.c8, temp_t1.c9, temp_t1.c10, temp_t1.c1+temp_t1.c2, temp_t1.c2+temp_t1.c3, temp_t1.c3+temp_t1.c4, temp_t1.c4+temp_t1.c5, temp_t1.c6+temp_t1.c7, temp_t1.c7+temp_t1.c8, temp_t1.c9+temp_t1.c10 from (select c1, c2, c3, c4, c5, c6, c7, c8, c9, c10 from test_vmem_tbl limit 1000000000) temp_t1 limit 1000000000) temp_t2 limit 100000) temp_t3 limit 10000;
+ERROR:  Out of memory  (seg0 slice1 11.158.187.228:7002 pid=80784)
+DETAIL:  Vmem limit reached, failed to allocate 16408 bytes from tracker, which has 0 MB available
+2: select gp_inject_fault_infinite('vmem_oom_set_startup_chunks', 'reset', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+2: select gp_inject_fault_infinite('vmem_oom_set_tracked_bytes', 'reset', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+2: select gp_inject_fault_infinite('vmem_oom_startup', 'reset', dbid) from gp_segment_configuration where content = 0 and role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+(1 row)
+3<:  <... completed>
+ERROR:  failed to acquire resources on one or more segments
+DETAIL:  FATAL:  Out of memory
+DETAIL:  Per-query memory limit reached: current limit is 20480 kB, requested 12582912 bytes, has 0 MB available for this query
+ (seg0 11.158.187.228:7002)
+1q: ... <quitting>
+2q: ... <quitting>
+3q: ... <quitting>
+1: drop table test_vmem_tbl;
+DROP
+-- start_ignore
+!\retcode gpconfig -c gp_log_format -v csv;
+-- start_ignore
+20220324:16:25:56:080854 gpconfig:chenwen-gpdb-test011158187228:gpuser-[INFO]:-completed successfully with parameters '-c gp_log_format -v csv'
+
+-- end_ignore
+(exited with code 0)
+!\retcode gpstop -ari;
+-- start_ignore
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Starting gpstop with args: -ari
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Gathering information and validating the environment...
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Obtaining Greenplum Coordinator catalog information
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Obtaining Segment details from coordinator...
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Greenplum Version: 'postgres (Greenplum Database) 7.0.0-alpha.0+dev.15182.gd4a2c6d3cf build dev'
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing Coordinator instance shutdown with mode='immediate'
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Coordinator segment instance directory=/home/gpuser/gpdb/gpAux/gpdemo/datadirs/qddir/demoDataDir-1
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Attempting forceful termination of any leftover coordinator process
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Terminating processes for segment /home/gpuser/gpdb/gpAux/gpdemo/datadirs/qddir/demoDataDir-1
+20220324:16:25:56:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Stopping coordinator standby host chenwen-gpdb-test011158187228.na62 mode=immediate
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Successfully shutdown standby process on chenwen-gpdb-test011158187228.na62
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Targeting dbid [2, 5, 3, 6, 4, 7] for shutdown
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing parallel primary segment instance shutdown, please wait...
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-0.00% of jobs completed
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-100.00% of jobs completed
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Commencing parallel mirror segment instance shutdown, please wait...
+20220324:16:25:57:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-0.00% of jobs completed
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-100.00% of jobs completed
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-----------------------------------------------------
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-   Segments stopped successfully      = 6
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-   Segments with errors during stop   = 0
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-----------------------------------------------------
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Successfully shutdown 6 of 6 segment instances 
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Database successfully shutdown with no errors reported
+20220324:16:25:58:081234 gpstop:chenwen-gpdb-test011158187228:gpuser-[INFO]:-Restarting System...
+
+-- end_ignore
+(exited with code 0)
+-- end_ignore
+
