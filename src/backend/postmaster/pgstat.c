@@ -3341,14 +3341,6 @@ pgstat_read_statsfile(Oid onlydb, bool permanent)
 	if ((fpin = AllocateFile(statfile, PG_BINARY_R)) == NULL)
 		return dbhash;
 
-		/*
-	 * Try to open the status file. If it doesn't exist, the backends simply
-	 * return zero for anything and the collector simply starts from scratch
-	 * with empty counters.
-	 */
-	if ((fpin = AllocateFile(statfile, PG_BINARY_R)) == NULL)
-		return dbhash;
-
 	/*
 	 * Verify it's of the expected format.
 	 */
