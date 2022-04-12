@@ -252,7 +252,7 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	AppendOnlyRecycleDeadSegments(onerel, &new_dropped_segs);
+	AppendOptimizedRecycleDeadSegments(onerel, &new_dropped_segs);
 
 	all_dropped_segs = bms_union(pre_dropped_segs, new_dropped_segs);
 
@@ -388,6 +388,8 @@ ao_vacuum_rel_compact(Relation onerel, int options, VacuumParams *params,
 void
 ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
+	Bitmapset *dropped_segs = NULL;
+
 	Assert(RelationIsAppendOptimized(rel));
 	Assert(params != NULL);
 
@@ -397,11 +399,11 @@ ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy
 	 * Do the actual work --- either FULL or "lazy" vacuum
 	 */
 	if (ao_vacuum_phase == VACOPT_AO_PRE_CLEANUP_PHASE)
-		ao_vacuum_rel_pre_cleanup(rel, params->options, params, bstrategy);
+		dropped_segs = ao_vacuum_rel_pre_cleanup(rel, params->options, params, bstrategy);
 	else if (ao_vacuum_phase == VACOPT_AO_COMPACT_PHASE)
 		ao_vacuum_rel_compact(rel, params->options, params, bstrategy);
 	else if (ao_vacuum_phase == VACOPT_AO_POST_CLEANUP_PHASE)
-		ao_vacuum_rel_post_cleanup(rel, params->options, params, bstrategy);
+		ao_vacuum_rel_post_cleanup(rel, params->options, params, bstrategy, dropped_segs);
 	else
 		/* Do nothing here, we will launch the stages later */
 		Assert(ao_vacuum_phase == 0);

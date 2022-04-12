@@ -1976,7 +1976,6 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	int			save_nestlevel;
 	bool		is_appendoptimized;
 	bool		is_toast;
-	Bitmapset	*dropped_segs = NULL;
 
 	Assert(params != NULL);
 
