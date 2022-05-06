@@ -1467,12 +1467,11 @@ aocs_fetch(AOCSFetchDesc aocsFetchDesc,
 
 	Assert(segmentFileNum >= 0);
 
-	/* Fail if segmentFileNum is out of the scanning scope. */
 	if (!bms_is_member(segmentFileNum, aocsFetchDesc->targetsegs))
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("Segment file No. %d is out of the scanning scope for target relfilenode %u.",
-				 		segmentFileNum, aocsFetchDesc->relation->rd_node.relNode)));
+				 errmsg("Row No. %ld in segment file No. %d is out of scanning scope for target relfilenode %u.",
+				 		rowNum, segmentFileNum, aocsFetchDesc->relation->rd_node.relNode)));
 
 	/*
 	 * if the rowNum is bigger than lastsequence, skip it.

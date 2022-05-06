@@ -1741,7 +1741,7 @@ appendonly_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, voi
 	int nsegs = 0;
 	FileSegInfo **seginfos;
 
-	Assert(rel != NULL);
+	Assert(RelationIsValid(rel));
 
 	if (segnos != NULL)
 	{

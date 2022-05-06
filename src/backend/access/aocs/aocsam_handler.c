@@ -1695,7 +1695,7 @@ aoco_relation_get_segnos(Relation rel, Snapshot snapshot, int *segnos, void *ext
 	int nsegs = 0;
 	AOCSFileSegInfo **seginfos;
 
-	Assert(rel != NULL);
+	Assert(RelationIsValid(rel));
 
 	if (segnos != NULL)
 	{
