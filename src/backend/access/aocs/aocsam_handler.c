@@ -1289,6 +1289,7 @@ aoco_index_build_range_scan(Relation heapRelation,
 	Oid			blkdirrelid;
 	Oid			blkidxrelid;
 	TransactionId OldestXmin;
+	AOTupleId  *aoTupleId;
 
 	/*
 	 * sanity checks
@@ -1499,7 +1500,7 @@ aoco_index_build_range_scan(Relation heapRelation,
 	 */
 	while (aoco_getnextslot(&aocoscan->rs_base, ForwardScanDirection, slot))
 	{
-		bool		tupleIsAlive;
+		bool		tupleIsAlive = false;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1528,14 +1529,26 @@ aoco_index_build_range_scan(Relation heapRelation,
 		}
 #endif
 
-		/*
-		 * appendonly_getnext did the time qual check
-		 *
-		 * GPDB_12_MERGE_FIXME: in heapam, we do visibility checks in SnapshotAny case
-		 * here. Is that not needed with AO_COLUMN tables?
-		 */
 		tupleIsAlive = true;
 		reltuples += 1;
+
+		/*
+		 * aoco_getnextslot did the time qual check
+		 *
+		 * In heapam, we do visibility checks in SnapshotAny case here.
+		 * It is also necessary for Append-Optimized tables. Otherwise
+		 * CREATE INDEX and ANALYZE may produce wildly different reltuples
+		 * values, e.g. when there are many recently-dead tuples.
+		 */
+		if (snapshot == SnapshotAny)
+		{
+			aoTupleId = (AOTupleId *) &slot->tts_tid;
+			if (!AppendOnlyVisimap_IsVisible(&aocoscan->visibilityMap, aoTupleId))
+			{
+				tupleIsAlive = false;
+				reltuples--;
+			}
+		}
 
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 
