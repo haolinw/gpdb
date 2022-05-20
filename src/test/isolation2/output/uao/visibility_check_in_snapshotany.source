@@ -1,0 +1,41 @@
+-- This is intended to verify read-only transactions is able to run
+-- concurently with index creation.
+
+set default_table_access_method=@amname@;
+SET
+
+create table @amname@_snapshotany_tbl(a int, b int);
+CREATE
+insert into @amname@_snapshotany_tbl select a,a from generate_series(1,10) a;
+INSERT 10
+
+-- Case 1, verify readonly transaction is able to run concurrently with index creation.
+
+1: begin;
+BEGIN
+1: select * from @amname@_snapshotany_tbl where a = 2;
+ a | b 
+---+---
+ 2 | 2 
+(1 row)
+
+2: begin;
+BEGIN
+2: create index on @amname@_snapshotany_tbl(a); -- expect no hang;
+CREATE
+
+1: select * from @amname@_snapshotany_tbl where a = 2; -- expect no hang;
+ a | b 
+---+---
+ 2 | 2 
+(1 row)
+
+1: end;
+END
+2: end;
+END
+
+drop table @amname@_snapshotany_tbl;
+DROP
+reset default_table_access_method;
+RESET
