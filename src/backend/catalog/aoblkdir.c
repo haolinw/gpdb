@@ -58,7 +58,7 @@ AlterTableCreateAoBlkdirTable(Oid relOid)
 	 * ShareRowExclusiveLock is more appropriate for this purpose than the
 	 * sledgehammer of AccessExclusiveLock.
 	 */
-	rel = table_open(relOid, ShareRowExclusiveLock);
+	rel = table_open(relOid, ExclusiveLock);
 
 	/* Create a tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(4);
