@@ -55,8 +55,8 @@ AlterTableCreateAoBlkdirTable(Oid relOid)
 	 * sequential scans (select) transactions need not be blocked. Index scans
 	 * cannot happen because the fact that we are creating block directory
 	 * implies no index is yet defined on this appendoptimized table.
-	 * ShareRowExclusiveLock is more appropriate for this purpose than the
-	 * sledgehammer of AccessExclusiveLock.
+	 * Using ExclusiveLock for this purpose as we allow read-only transactions
+	 * being running concurrently.
 	 */
 	rel = table_open(relOid, ExclusiveLock);
 

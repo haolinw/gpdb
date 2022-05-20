@@ -1,8 +1,26 @@
+-- This is intended to verify read-only transactions is able to run
+-- concurently with index creation.
+
 set default_table_access_method=@amname@;
 
 create table @amname@_snapshotany_tbl(a int, b int);
-insert into @amname@_snapshotany_tbl select a,a from generate_series(1,10) a ;
-create index on @amname@_snapshotany_tbl(a);
+insert into @amname@_snapshotany_tbl select a,a from generate_series(1,10) a;
+
+-- Case 1, verify readonly transaction is able to run concurrently with index creation.
+
+1: begin;
+1: select * from @amname@_snapshotany_tbl where a = 2;
+
+2: begin;
+2: create index on @amname@_snapshotany_tbl(a); -- expect no hang;
+
+1: select * from @amname@_snapshotany_tbl where a = 2; -- expect no hang;
+
+1: end;
+2: end;
+
+-- Case 2, verify index creation is able to update table's pg_class->reltuples correctly
+-- when pre-existing readonly transaction is not finished.
 
 1: set enable_seqscan = off;
 1: begin;
