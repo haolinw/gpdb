@@ -922,9 +922,10 @@ aoco_index_fetch_tuple_exists(Relation rel,
 }
 
 static bool
-aocs_tid_visible(struct IndexFetchTableData *scan,
-				 ItemPointer tid,
-				 Snapshot snapshot)
+aocs_index_tid_visible(struct IndexFetchTableData *scan,
+					   ItemPointer tid,
+					   Snapshot snapshot,
+					   void *extra)
 {
 	IndexFetchAOCOData *aocoscan = (IndexFetchAOCOData *) scan;
 
@@ -954,13 +955,8 @@ aocs_tid_visible(struct IndexFetchTableData *scan,
 											  appendOnlyMetaDataSnapshot,
 											  aocoscan->proj);
 	}
-	else
-	{
-		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
-		 * between calls? Add a sanity check for that here. */
-	}
 
-	return aocs_tuple_visible(aocoscan->aocofetch, tid);
+	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
 
 static void
@@ -2163,7 +2159,7 @@ static const TableAmRoutine ao_column_methods = {
 
 	.dml_init = aoco_dml_init,
 	.dml_finish = aoco_dml_finish,
-	.tid_visible = aocs_tid_visible,
+	.index_tid_visible = aocs_index_tid_visible,
 
 	.tuple_insert = aoco_tuple_insert,
 	.tuple_insert_speculative = aoco_tuple_insert_speculative,

@@ -690,9 +690,10 @@ appendonly_index_fetch_tuple_exists(Relation rel,
 }
 
 static bool
-appendonly_tid_visible(struct IndexFetchTableData *scan,
-					   ItemPointer tid,
-					   Snapshot snapshot)
+appendonly_index_tid_visible(struct IndexFetchTableData *scan,
+							 ItemPointer tid,
+							 Snapshot snapshot,
+							 void *extra)
 {
 	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
 	if (!aoscan->aofetch)
@@ -713,11 +714,6 @@ appendonly_tid_visible(struct IndexFetchTableData *scan,
 				appendonly_fetch_init(aoscan->xs_base.rel,
 									  snapshot,
 									  appendOnlyMetaDataSnapshot);
-	}
-	else
-	{
-		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
-		 * between calls? Add a sanity check for that here. */
 	}
 
 	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
@@ -2164,7 +2160,7 @@ static const TableAmRoutine ao_row_methods = {
 
 	.dml_init = appendonly_dml_init,
 	.dml_finish = appendonly_dml_finish,
-	.tid_visible = appendonly_tid_visible,
+	.index_tid_visible = appendonly_index_tid_visible,
 
 	.tuple_insert = appendonly_tuple_insert,
 	.tuple_insert_speculative = appendonly_tuple_insert_speculative,

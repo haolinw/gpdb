@@ -261,7 +261,6 @@ AppendOnlyBlockDirectory_Init_forUniqueChecks(
 
 	/* Segfile setup is not necessary as physical AO tuples will not be accessed */
 	blockDirectory->segmentFileInfo = NULL;
-	blockDirectory->totalSegfiles = -1;
 	blockDirectory->currentSegmentFileNum = -1;
 
 	/* Metadata snapshot assignment is deferred to lookup-time */
@@ -609,9 +608,7 @@ AppendOnlyBlockDirectory_GetEntry(
 		}
 	}
 
-	fsInfo = blockDirectory->segmentFileInfo[segmentFileNum];
-
-	Assert(fsInfo != NULL);
+	GET_SEGINFO(blockDirectory->segmentFileInfo, segmentFileNum, fsInfo);
 
 	/*
 	 * Search the btree index to find the minipage that contains the rowNum.
