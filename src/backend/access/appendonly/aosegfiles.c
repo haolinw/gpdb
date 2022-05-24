@@ -374,47 +374,6 @@ GetAllFileSegInfo(Relation parentrel,
 	return result;
 }
 
-FileSegInfo **
-GetAllFileSegInfoArray(Relation parentrel,
-					   Snapshot appendOnlyMetaDataSnapshot)
-{
-	FileSegInfo	  **segArray;
-	FileSegInfo	  **segs;
-	int 			totalsegs;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	segs = GetAllFileSegInfo(parentrel, appendOnlyMetaDataSnapshot, &totalsegs, NULL);
-
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		FileSegInfo *seg;
-		seg = segs[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(segs);
-
-	return segArray;
-}
-FileSegInfo **
-AllFileSegInfoToArray(FileSegInfo **allSegInfo, int totalsegs)
-{
-	FileSegInfo	  **segArray;
-
-	if (allSegInfo == NULL)
-		return NULL;
-
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		FileSegInfo *seg;
-		seg = allSegInfo[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(allSegInfo);
-
-	return segArray;
-}
-
-
 /*
  * The comparison routine that sorts an array of FileSegInfos
  * in the ascending order of the segment number.
@@ -584,6 +543,9 @@ GetAllFileSegInfo_pg_aoseg_rel(char *relationName,
 	 * small, we just sort the array for all cases.
 	 */
 	qsort((char *) allseginfo, *totalsegs, sizeof(FileSegInfo *), aoFileSegInfoCmp);
+
+	/* fill SEGNO_MAP accordingly */
+	FILL_SEGNO_MAP(allseginfo, *totalsegs);
 
 	return allseginfo;
 }
@@ -1700,21 +1662,6 @@ FreeAllSegFileInfo(FileSegInfo **allSegInfo, int totalSegFiles)
 		Assert(allSegInfo[file_no] != NULL);
 
 		pfree(allSegInfo[file_no]);
-	}
-}
-
-void
-FreeAllSegFileInfoArray(FileSegInfo **allSegInfoArray)
-{
-	FileSegInfo *segInfo;
-
-	Assert(allSegInfoArray);
-
-	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; ++i)
-	{
-		segInfo = allSegInfoArray[i];
-		if (segInfo)
-			pfree(segInfo);
 	}
 }
 

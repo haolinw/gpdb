@@ -1210,7 +1210,19 @@ openFetchSegmentFile(AOCSFetchDesc aocsFetchDesc,
 
 	Assert(!datumStreamFetchDesc->currentSegmentFile.isOpen);
 
-	fsInfo = aocsFetchDesc->segmentFileInfo[openSegmentFileNum];
+	int idx = segno2idx(openSegmentFileNum);
+	if (!segno2idx_validate(idx))
+	{
+		ereport(WARNING,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
+                        AOTupleId_MaxSegmentFileNum, idx)));
+		return false;
+	}
+
+	fsInfo = aocsFetchDesc->segmentFileInfo[idx];
+	Assert(fsInfo);
+	Assert(fsInfo->segno == openSegmentFileNum);
 
 	/*
 	 * Don't try to open a segment file when its EOF is 0, since the file may
@@ -1307,7 +1319,7 @@ aocs_fetch_init(Relation relation,
                                  NULL);
 
 	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot);
+		GetAllAOCSFileSegInfo(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -1317,12 +1329,19 @@ aocs_fetch_init(Relation relation,
 	memset(aocsFetchDesc->lastSequence, -1, sizeof(aocsFetchDesc->lastSequence));
 	for (int i = -1; i < aocsFetchDesc->totalSegfiles; i++)
 	{
-		/* always initailize segment 0 */
-		segno = (i < 0 ? 0 : aocsFetchDesc->segmentFileInfo[i]->segno);
+		if (i < 0)
+			/* always initailize segment 0 */
+			segno = 0;
+		else
+		{
+			segno = aocsFetchDesc->segmentFileInfo[i]->segno);
+			aocsFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
+		}
 		/* set corresponding bit for target segment */
 		aocsFetchDesc->lastSequence[segno] = ReadLastSequence(aocsFetchDesc->segrelid, segno);
-		aocsFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
 	}
+	for (int i = aocsFetchDesc->totalSegfiles; i < AOTupleId_MultiplierSegmentFileNum; i++)
+		aocsFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 
 	AppendOnlyBlockDirectory_Init_forSearch(
 											&aocsFetchDesc->blockDirectory,
@@ -1611,12 +1630,6 @@ aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
 	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
 	int				numCols = aocsFetchDesc->relation->rd_att->natts;
-	AOCSFileSegInfo	*segInfo;
-	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry;
-	bool		isSnapshotAny = (aocsFetchDesc->snapshot == SnapshotAny);
-
-	segInfo = aocsFetchDesc->segmentFileInfo[segmentFileNum];
-	Assert(segInfo);
 
 	if (numCols == 0)
 		return false;
@@ -1626,16 +1639,28 @@ aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
 	if (rowNum > aocsFetchDesc->lastRowNum[segmentFileNum] ||
 		rowNum < aocsFetchDesc->firstRowNum[segmentFileNum])
 	{
-		curBlockDirectoryEntry = &datumStreamFetchDesc->currentBlock.blockDirectoryEntry;
+		AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry = &datumStreamFetchDesc->currentBlock.blockDirectoryEntry;
 		if(!AppendOnlyBlockDirectory_GetEntry(&aocsFetchDesc->blockDirectory,
 											  aoTupleId,
 											  0,
 											  curBlockDirectoryEntry))
 			return false;
+
 		if (rowNum > aocsFetchDesc->lastRowNum[segmentFileNum])
 			aocsFetchDesc->lastRowNum[segmentFileNum] = curBlockDirectoryEntry->range.lastRowNum;
 		if (rowNum < aocsFetchDesc->firstRowNum[segmentFileNum])
 			aocsFetchDesc->firstRowNum[segmentFileNum] = curBlockDirectoryEntry->range.firstRowNum;
+
+		int idx = segno2idx(segmentFileNum);
+		if (!segno2idx_validate(idx))
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg("exceeded the range (0 ~ %d) of segment index %d",
+							AOTupleId_MaxSegmentFileNum, idx)));
+
+		AOCSFileSegInfo	*segInfo = aocsFetchDesc->segmentFileInfo[idx];
+		Assert(segInfo);
+		Assert(segInfo->segno == segmentFileNum);
 
 		if (curBlockDirectoryEntry->range.afterFileOffset > segInfo->vpinfo.entry[0].eof)
 			return false;
@@ -1644,11 +1669,10 @@ aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
 	if (rowNum > aocsFetchDesc->lastRowNum[segmentFileNum])
 		return false;
 
+	bool isSnapshotAny = (aocsFetchDesc->snapshot == SnapshotAny);
 	if (!isSnapshotAny &&
 		!AppendOnlyVisimap_IsVisible(&aocsFetchDesc->visibilityMap, aoTupleId))
-	{
-		return false;			/* row has been deleted or updated. */
-	}
+		return false; /* row has been deleted or updated. */
 
 	return true;
 }
@@ -1681,7 +1705,7 @@ aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc)
 
 	if (aocsFetchDesc->segmentFileInfo)
 	{
-		FreeAllAOCSSegFileInfoArray(aocsFetchDesc->segmentFileInfo);
+		FreeAllAOCSSegFileInfo(aocsFetchDesc->segmentFileInfo, aocsFetchDesc->totalSegfiles);
 		pfree(aocsFetchDesc->segmentFileInfo);
 		aocsFetchDesc->segmentFileInfo = NULL;
 	}

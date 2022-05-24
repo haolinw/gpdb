@@ -732,13 +732,8 @@ aocs_tid_visible(struct IndexFetchTableData *scan,
 											  appendOnlyMetaDataSnapshot,
 											  aocoscan->proj);
 	}
-	else
-	{
-		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
-		 * between calls? Add a sanity check for that here. */
-	}
 
-	return aocs_tuple_visible(aocoscan->aocofetch, tid);
+	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
 
 static void
