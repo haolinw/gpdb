@@ -63,7 +63,6 @@ typedef struct AppendOnlyVisimap
 	 * Support operations to search, load, and store visibility map entries.
 	 */
 	AppendOnlyVisimapStore visimapStore;
-	Bitmapset			  *allvisible_bitmap[AOTupleId_MultiplierSegmentFileNum];
 
 } AppendOnlyVisimap;
 

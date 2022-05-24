@@ -804,11 +804,6 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		 * the last decompressed block between fetch calls.
 		 * Index scan path on GPDB's bitmap index should works the same as bitmap paths.
 		 *
-		 * GPDB_12_MERGE_FIXME: Also there is no code in place in order to be
-		 * able to use index only scans on AO/AOCO relations. However it is
-		 * suboptimal to have to expose the relation's access method here. There
-		 * are no straight forward solutions though.
-		 *
 		 * Enable index only scan here, but the index scan is still disabled.
 		 */
 		if (index->amhasgettuple &&

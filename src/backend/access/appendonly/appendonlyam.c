@@ -1605,22 +1605,39 @@ static bool
 openFetchSegmentFile(AppendOnlyFetchDesc aoFetchDesc,
 					 int openSegmentFileNum)
 {
+	int			i;
+
 	FileSegInfo *fsInfo;
+	int			segmentFileNum;
 	int64		logicalEof;
 	int32		fileSegNo;
 
 	Assert(!aoFetchDesc->currentSegmentFile.isOpen);
 
-	fsInfo = aoFetchDesc->segmentFileInfo[openSegmentFileNum];
-	if (fsInfo->state == AOSEG_STATE_AWAITING_DROP)
+	i = 0;
+	while (true)
 	{
-		/*
-		 * File compacted, but not dropped. All information are
-		 * declared invisible
-		 */
-		return false;
+		if (i >= aoFetchDesc->totalSegfiles)
+			return false;
+		/* Segment file not visible in catalog information. */
+
+		fsInfo = aoFetchDesc->segmentFileInfo[i];
+		segmentFileNum = fsInfo->segno;
+		if (openSegmentFileNum == segmentFileNum)
+		{
+			if (fsInfo->state == AOSEG_STATE_AWAITING_DROP)
+			{
+				/*
+				 * File compacted, but not dropped. All information are
+				 * declared invisible
+				 */
+				return false;
+			}
+			logicalEof = (int64) fsInfo->eof;
+			break;
+		}
+		i++;
 	}
-	logicalEof = (int64) fsInfo->eof;
 
 	/*
 	 * Don't try to open a segment file when its EOF is 0, since the file may
@@ -1967,10 +1984,11 @@ appendonly_fetch_init(Relation relation,
 	 * Get information about all the file segments we need to scan
 	 */
 	aoFetchDesc->segmentFileInfo =
-		GetAllFileSegInfoArray(
+		GetAllFileSegInfo(
 						  relation,
-						  appendOnlyMetaDataSnapshot
-						  );
+						  appendOnlyMetaDataSnapshot,
+						  &aoFetchDesc->totalSegfiles,
+						  NULL);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -1984,7 +2002,6 @@ appendonly_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aoFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aoFetchDesc->lastSequence[segno] = ReadLastSequence(aoFormData.segrelid, segno);
-		aoFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
 	}
 
 	AppendOnlyStorageRead_Init(
@@ -2027,6 +2044,7 @@ appendonly_fetch_init(Relation relation,
 											&aoFetchDesc->blockDirectory,
 											appendOnlyMetaDataSnapshot,
 											aoFetchDesc->segmentFileInfo,
+											aoFetchDesc->totalSegfiles,
 											aoFetchDesc->relation,
 											1,
 											false,
@@ -2265,45 +2283,48 @@ appendonly_fetch(AppendOnlyFetchDesc aoFetchDesc,
 	/* Segment file not in aoseg table.. */
 }
 
+static inline bool
+appendonly_tid_in_blkdir_entry(AppendOnlyFetchDesc aoFetchDesc,
+				   			   AOTupleId *aoTupleId)
+{
+	int			segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
+	int64		rowNum = AOTupleIdGet_rowNum(aoTupleId);
+	AppendOnlyBlockDirectoryEntry *entry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
+
+	return (segmentFileNum == aoFetchDesc->blockDirectory.currentSegmentFileNum &&
+			AppendOnlyBlockDirectoryEntry_RangeHasRow(entry, rowNum));
+}
+
 bool
 appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
 						 AOTupleId *aoTupleId)
 {
-	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
-	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
-	FileSegInfo	   *segInfo;
-	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry;
-	bool		isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
-
-	segInfo = aoFetchDesc->segmentFileInfo[segmentFileNum];
-	Assert(segInfo);
-
-	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum] ||
-		rowNum < aoFetchDesc->firstRowNum[segmentFileNum])
+	bool got_entry = false;
+	while (!appendonly_tid_in_blkdir_entry(aoFetchDesc, aoTupleId))
 	{
-		curBlockDirectoryEntry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
+		if (got_entry)
+			return false;
+
 		if(!AppendOnlyBlockDirectory_GetEntry(&aoFetchDesc->blockDirectory,
 											  aoTupleId,
 											  0,
-											  curBlockDirectoryEntry))
+											  &aoFetchDesc->currentBlock.blockDirectoryEntry))
 			return false;
-		if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
-			aoFetchDesc->lastRowNum[segmentFileNum] = curBlockDirectoryEntry->range.lastRowNum;
-		if (rowNum < aoFetchDesc->firstRowNum[segmentFileNum])
-			aoFetchDesc->firstRowNum[segmentFileNum] = curBlockDirectoryEntry->range.firstRowNum;
+		
+		got_entry = true;
 
-		if (curBlockDirectoryEntry->range.afterFileOffset > segInfo->eof)
-			return false;
+		/*
+		 * Go back to check aoTupleId if in new obtained blkdir entry.
+		 * We have to do this because aoTupleId.rowRum might be greater
+		 * than blkdir last entry.lastRowNum (check the comments at the
+		 * end of AppendOnlyBlockDirectory_GetEntry()). If that's the
+		 * case, currently we think the tuple is invisible.
+		 */
 	}
 
-	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
-		return false;
-
-	if (!isSnapshotAny &&
+	if (aoFetchDesc->snapshot != SnapshotAny &&
 		!AppendOnlyVisimap_IsVisible(&aoFetchDesc->visibilityMap, aoTupleId))
-	{
-		return false;			/* row has been deleted or updated. */
-	}
+		return false;
 
 	return true;
 }
@@ -2323,7 +2344,7 @@ appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 
 	if (aoFetchDesc->segmentFileInfo)
 	{
-		FreeAllSegFileInfoArray(aoFetchDesc->segmentFileInfo);
+		FreeAllSegFileInfo(aoFetchDesc->segmentFileInfo, aoFetchDesc->totalSegfiles);
 		pfree(aoFetchDesc->segmentFileInfo);
 		aoFetchDesc->segmentFileInfo = NULL;
 	}
