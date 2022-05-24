@@ -222,8 +222,6 @@ typedef struct AOCSFetchDescData
 	 * last sequence from gp_fastsequence.
 	 */
 	int64			lastSequence[AOTupleId_MultiplierSegmentFileNum];
-	int64 			lastRowNum[AOTupleId_MultiplierSegmentFileNum];
-	int64 			firstRowNum[AOTupleId_MultiplierSegmentFileNum];
 
 	char			*segmentFileName;
 	int				segmentFileNameMaxLen;

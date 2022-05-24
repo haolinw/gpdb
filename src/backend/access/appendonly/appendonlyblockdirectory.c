@@ -172,6 +172,7 @@ AppendOnlyBlockDirectory_Init_forSearch(
 										AppendOnlyBlockDirectory *blockDirectory,
 										Snapshot appendOnlyMetaDataSnapshot,
 										FileSegInfo **segmentFileInfo,
+										int totalSegfiles,
 										Relation aoRel,
 										int numColumnGroups,
 										bool isAOCol,
@@ -193,11 +194,12 @@ AppendOnlyBlockDirectory_Init_forSearch(
 
 	ereportif(Debug_appendonly_print_blockdirectory, LOG,
 			  (errmsg("Append-only block directory init for search: "
-					  "(numColumnGroups, isAOCol)="
-					  "(%d, %d)",
-					  numColumnGroups, isAOCol)));
+					  "(totalSegfiles, numColumnGroups, isAOCol)="
+					  "(%d, %d, %d)",
+					  totalSegfiles, numColumnGroups, isAOCol)));
 
 	blockDirectory->segmentFileInfo = segmentFileInfo;
+	blockDirectory->totalSegfiles = totalSegfiles;
 	blockDirectory->aoRel = aoRel;
 	blockDirectory->appendOnlyMetaDataSnapshot = appendOnlyMetaDataSnapshot;
 	blockDirectory->numColumnGroups = numColumnGroups;
@@ -323,6 +325,7 @@ AppendOnlyBlockDirectory_Init_forInsert(
 	}
 
 	blockDirectory->segmentFileInfo = NULL;
+	blockDirectory->totalSegfiles = -1;
 	blockDirectory->currentSegmentFileInfo = segmentFileInfo;
 
 	blockDirectory->currentSegmentFileNum = segno;
@@ -391,6 +394,7 @@ AppendOnlyBlockDirectory_Init_addCol(
 	}
 
 	blockDirectory->segmentFileInfo = NULL;
+	blockDirectory->totalSegfiles = -1;
 	blockDirectory->currentSegmentFileInfo = segmentFileInfo;
 
 	blockDirectory->currentSegmentFileNum = segno;
@@ -618,7 +622,16 @@ AppendOnlyBlockDirectory_GetEntry(
 		}
 	}
 
-	fsInfo = blockDirectory->segmentFileInfo[segmentFileNum];
+	for (int i = 0; i < blockDirectory->totalSegfiles; i++)
+	{
+		fsInfo = blockDirectory->segmentFileInfo[i];
+
+		if (!blockDirectory->isAOCol && segmentFileNum == fsInfo->segno)
+			break;
+		else if (blockDirectory->isAOCol && segmentFileNum ==
+				 ((AOCSFileSegInfo *) fsInfo)->segno)
+			break;
+	}
 
 	Assert(fsInfo != NULL);
 
@@ -1506,8 +1519,9 @@ AppendOnlyBlockDirectory_End_forSearch(
 
 	ereportif(Debug_appendonly_print_blockdirectory, LOG,
 			  (errmsg("Append-only block directory end for search: "
-					  "(numColumnGroups, isAOCol)="
-					  "(%d, %d)",
+					  "(totalSegfiles, numColumnGroups, isAOCol)="
+					  "(%d, %d, %d)",
+					  blockDirectory->totalSegfiles,
 					  blockDirectory->numColumnGroups,
 					  blockDirectory->isAOCol)));
 
