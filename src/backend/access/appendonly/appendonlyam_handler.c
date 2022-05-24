@@ -714,11 +714,6 @@ appendonly_tid_visible(struct IndexFetchTableData *scan,
 									  snapshot,
 									  appendOnlyMetaDataSnapshot);
 	}
-	else
-	{
-		/* GPDB_12_MERGE_FIXME: Is it possible for the 'snapshot' to change
-		 * between calls? Add a sanity check for that here. */
-	}
 
 	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
 }
