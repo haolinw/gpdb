@@ -507,16 +507,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 			visimapidxid,
 			AccessShareLock,
 			appendOnlyMetaDataSnapshot);
-
-	if (RelationIsAoRows(aoRelation))
-	{
-		segmentFileInfo = AllFileSegInfoToArray(segmentFileInfo, totalSegfiles);
-	}
-	else
-	{
-		segmentFileInfo = (FileSegInfo **) AllAOCSFileSegInfoToArray(
-				(AOCSFileSegInfo **)segmentFileInfo, totalSegfiles);
-	}
+	
 	AppendOnlyBlockDirectory_Init_forSearch(&vacuumIndexState.blockDirectory,
 			appendOnlyMetaDataSnapshot,
 			segmentFileInfo,
@@ -567,11 +558,11 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 	{
 		if (RelationIsAoRows(aoRelation))
 		{
-			FreeAllSegFileInfoArray(segmentFileInfo);
+			FreeAllSegFileInfo(segmentFileInfo, totalSegfiles);
 		}
 		else
 		{
-			FreeAllAOCSSegFileInfoArray((AOCSFileSegInfo **)segmentFileInfo);
+			FreeAllAOCSSegFileInfo((AOCSFileSegInfo **)segmentFileInfo, totalSegfiles);
 		}
 		pfree(segmentFileInfo);
 	}

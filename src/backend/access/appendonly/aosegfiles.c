@@ -378,47 +378,6 @@ GetAllFileSegInfo(Relation parentrel,
 	return result;
 }
 
-FileSegInfo **
-GetAllFileSegInfoArray(Relation parentrel,
-					   Snapshot appendOnlyMetaDataSnapshot)
-{
-	FileSegInfo	  **segArray;
-	FileSegInfo	  **segs;
-	int 			totalsegs;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	segs = GetAllFileSegInfo(parentrel, appendOnlyMetaDataSnapshot, &totalsegs);
-
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		FileSegInfo *seg;
-		seg = segs[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(segs);
-
-	return segArray;
-}
-FileSegInfo **
-AllFileSegInfoToArray(FileSegInfo **allSegInfo, int totalsegs)
-{
-	FileSegInfo	  **segArray;
-
-	if (allSegInfo == NULL)
-		return NULL;
-
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		FileSegInfo *seg;
-		seg = allSegInfo[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(allSegInfo);
-
-	return segArray;
-}
-
-
 /*
  * The comparison routine that sorts an array of FileSegInfos
  * in the ascending order of the segment number.
@@ -469,6 +428,7 @@ GetAllFileSegInfo_pg_aoseg_rel(char *relationName,
 	 */
 	allseginfo = (FileSegInfo **) palloc0(sizeof(FileSegInfo *) * seginfo_slot_no);
 	seginfo_no = 0;
+	segno2idx_init();
 
 	/*
 	 * Now get the actual segfile information
@@ -566,6 +526,7 @@ GetAllFileSegInfo_pg_aoseg_rel(char *relationName,
 			   oneseginfo->segno,
 			   oneseginfo->eof,
 			   relationName);
+		segno2idx_set(oneseginfo->segno, seginfo_no);
 		seginfo_no++;
 
 		CHECK_FOR_INTERRUPTS();
@@ -579,6 +540,9 @@ GetAllFileSegInfo_pg_aoseg_rel(char *relationName,
 		pfree(allseginfo);
 		return NULL;
 	}
+
+	/* store the total number of segs into SEGNO2IDX_MAP[SEGNO2IDX_MAP_NUM] */
+	segno2idx_set(SEGNO2IDX_MAP_NUM, *totalsegs);
 
 	/*
 	 * Sort allseginfo by the order of segment file number.
@@ -1704,21 +1668,6 @@ FreeAllSegFileInfo(FileSegInfo **allSegInfo, int totalSegFiles)
 		Assert(allSegInfo[file_no] != NULL);
 
 		pfree(allSegInfo[file_no]);
-	}
-}
-
-void
-FreeAllSegFileInfoArray(FileSegInfo **allSegInfoArray)
-{
-	FileSegInfo *segInfo;
-
-	Assert(allSegInfoArray);
-
-	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; ++i)
-	{
-		segInfo = allSegInfoArray[i];
-		if (segInfo)
-			pfree(segInfo);
 	}
 }
 

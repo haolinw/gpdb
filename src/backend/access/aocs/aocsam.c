@@ -1238,7 +1238,18 @@ openFetchSegmentFile(AOCSFetchDesc aocsFetchDesc,
 
 	Assert(!datumStreamFetchDesc->currentSegmentFile.isOpen);
 
-	fsInfo = aocsFetchDesc->segmentFileInfo[openSegmentFileNum];
+	int idx = segno2idx(openSegmentFileNum);
+	if (!segno2idx_validate(idx))
+	{
+		ereport(WARNING,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
+                        AOTupleId_MaxSegmentFileNum, idx)));
+		return false;
+	}
+
+	fsInfo = aocsFetchDesc->segmentFileInfo[idx];
+	Assert(fsInfo);
 
 	/*
 	 * Don't try to open a segment file when its EOF is 0, since the file may
@@ -1334,8 +1345,8 @@ aocs_fetch_init(Relation relation,
                                  &checksum,
                                  NULL);
 
-	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
+	aocsFetchDesc->segmentFileInfo = 
+		GetAllAOCSFileSegInfo(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -1349,8 +1360,11 @@ aocs_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aocsFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aocsFetchDesc->lastSequence[segno] = ReadLastSequence(aocsFetchDesc->segrelid, segno);
-		aocsFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
+		if (i >= 0)
+			aocsFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 	}
+	for (int i = aocsFetchDesc->totalSegfiles; i < AOTupleId_MultiplierSegmentFileNum; i++)
+		aocsFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 
 	AppendOnlyBlockDirectory_Init_forSearch(
 											&aocsFetchDesc->blockDirectory,
@@ -1639,11 +1653,18 @@ aocs_tuple_visible(AOCSFetchDesc aocsFetchDesc,
 	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
 	int				numCols = aocsFetchDesc->relation->rd_att->natts;
-	AOCSFileSegInfo	*segInfo;
+	AOCSFileSegInfo	*segInfo = NULL;
 	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry;
 	bool		isSnapshotAny = (aocsFetchDesc->snapshot == SnapshotAny);
 
-	segInfo = aocsFetchDesc->segmentFileInfo[segmentFileNum];
+	int idx = segno2idx(segmentFileNum);
+	if (!segno2idx_validate(idx))
+		ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
+                        AOTupleId_MaxSegmentFileNum, idx)));
+
+	segInfo = aocsFetchDesc->segmentFileInfo[idx];
 	Assert(segInfo);
 
 	if (numCols == 0)
@@ -1707,7 +1728,7 @@ aocs_fetch_finish(AOCSFetchDesc aocsFetchDesc)
 
 	if (aocsFetchDesc->segmentFileInfo)
 	{
-		FreeAllAOCSSegFileInfoArray(aocsFetchDesc->segmentFileInfo);
+		FreeAllAOCSSegFileInfo(aocsFetchDesc->segmentFileInfo, aocsFetchDesc->totalSegfiles);
 		pfree(aocsFetchDesc->segmentFileInfo);
 		aocsFetchDesc->segmentFileInfo = NULL;
 	}

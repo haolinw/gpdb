@@ -103,6 +103,39 @@ AOTupleIdSetInvalid(AOTupleId *h)
 
 #define AOTupleId_MaxSegmentFileNum    			127
 #define AOTupleId_MultiplierSegmentFileNum    	128	// Next up power of 2 as multiplier.
+#define SEGNO2IDX_MAP_NUM						(AOTupleId_MaxSegmentFileNum + 1)
+
+int SEGNO2IDX_MAP[SEGNO2IDX_MAP_NUM + 1]; /* the last elment is used to store the total number of valid file segments */
+
+static inline void
+segno2idx_init()
+{
+	memset(SEGNO2IDX_MAP, -1, sizeof(SEGNO2IDX_MAP));
+}
+
+static inline void
+segno2idx_set(int segno, int idx)
+{
+	SEGNO2IDX_MAP[segno] = idx;
+}
+
+static inline int
+segno2idx(int segno)
+{
+	if (segno < 0 || segno > AOTupleId_MaxSegmentFileNum)
+		return -1;
+
+	return SEGNO2IDX_MAP[segno];
+}
+
+static inline bool
+segno2idx_validate(int idx)
+{
+	return !(idx < 0 ||
+			 idx > AOTupleId_MaxSegmentFileNum ||
+			 SEGNO2IDX_MAP[SEGNO2IDX_MAP_NUM] <= 0 ||
+			 idx >= SEGNO2IDX_MAP[SEGNO2IDX_MAP_NUM]);
+}
 
 extern char *AOTupleIdToString(AOTupleId *aoTupleId);
 

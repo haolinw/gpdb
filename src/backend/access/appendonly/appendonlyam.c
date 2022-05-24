@@ -1820,7 +1820,19 @@ openFetchSegmentFile(AppendOnlyFetchDesc aoFetchDesc,
 
 	Assert(!aoFetchDesc->currentSegmentFile.isOpen);
 
-	fsInfo = aoFetchDesc->segmentFileInfo[openSegmentFileNum];
+	int idx = segno2idx(openSegmentFileNum);
+	if (!segno2idx_validate(idx))
+	{
+		ereport(WARNING,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
+                        AOTupleId_MaxSegmentFileNum, idx)));
+		return false;
+	}
+
+	fsInfo = aoFetchDesc->segmentFileInfo[idx];
+	Assert(fsInfo);
+
 	if (fsInfo->state == AOSEG_STATE_AWAITING_DROP)
 	{
 		/*
@@ -2134,7 +2146,7 @@ appendonly_fetch_init(Relation relation,
 	 * Get information about all the file segments we need to scan
 	 */
 	aoFetchDesc->segmentFileInfo =
-		GetAllFileSegInfoArray(
+		GetAllFileSegInfo(
 						  relation,
 						  appendOnlyMetaDataSnapshot,
 						  &aoFetchDesc->totalSegfiles,
@@ -2152,8 +2164,11 @@ appendonly_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aoFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aoFetchDesc->lastSequence[segno] = ReadLastSequence(aoFormData.segrelid, segno);
-		aoFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
+		if (i >= 0)
+			aoFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 	}
+	for (int i = aoFetchDesc->totalSegfiles; i < AOTupleId_MultiplierSegmentFileNum; i++)
+		aoFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 
 	AppendOnlyStorageRead_Init(
 							   &aoFetchDesc->storageRead,
@@ -2439,11 +2454,18 @@ appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
 {
 	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
-	FileSegInfo	   *segInfo;
+	FileSegInfo	   *segInfo = NULL;
 	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry;
 	bool		isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
 
-	segInfo = aoFetchDesc->segmentFileInfo[segmentFileNum];
+	int idx = segno2idx(segmentFileNum);
+	if (!segno2idx_validate(idx))
+		ereport(ERROR,
+                (errcode(ERRCODE_INTERNAL_ERROR),
+                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
+                        AOTupleId_MaxSegmentFileNum, idx)));
+
+	segInfo = aoFetchDesc->segmentFileInfo[idx];
 	Assert(segInfo);
 
 	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum] ||
@@ -2491,7 +2513,7 @@ appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 
 	if (aoFetchDesc->segmentFileInfo)
 	{
-		FreeAllSegFileInfoArray(aoFetchDesc->segmentFileInfo);
+		FreeAllSegFileInfo(aoFetchDesc->segmentFileInfo, aoFetchDesc->totalSegfiles);
 		pfree(aoFetchDesc->segmentFileInfo);
 		aoFetchDesc->segmentFileInfo = NULL;
 	}

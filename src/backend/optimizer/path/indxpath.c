@@ -816,7 +816,7 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				((rel->amhandler != AO_ROW_TABLE_AM_HANDLER_OID &&
 				 rel->amhandler != AO_COLUMN_TABLE_AM_HANDLER_OID) ||
 				 index->amcostestimate == bmcostestimate ||
-				 ipath->path.pathtype == T_IndexOnlyScan)
+				 ipath->path.pathtype == T_IndexOnlyScan))
 			add_path(rel, (Path *) ipath);
 		if (index->amhasgetbitmap &&
 			/* GPDB: Give a chance of bitmap index path if seqscan is disabled.

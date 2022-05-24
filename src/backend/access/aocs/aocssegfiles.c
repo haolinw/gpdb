@@ -60,7 +60,6 @@
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
 
-
 static AOCSFileSegInfo **GetAllAOCSFileSegInfo_pg_aocsseg_rel(
 									 int numOfColumsn,
 									 char *relationName,
@@ -302,46 +301,6 @@ GetAllAOCSFileSegInfo(Relation prel,
 	return results;
 }
 
-AOCSFileSegInfo **
-GetAllAOCSFileSegInfoArray(Relation prel,
-						   Snapshot appendOnlyMetaDataSnapshot)
-{
-	AOCSFileSegInfo	  **segArray;
-	AOCSFileSegInfo	  **segs;
-	int 				totalsegs;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
-	segs = GetAllAOCSFileSegInfo(prel, appendOnlyMetaDataSnapshot, &totalsegs);
-
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		AOCSFileSegInfo *seg;
-		seg = segs[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(segs);
-
-	return segArray;
-}
-
-AOCSFileSegInfo **
-AllAOCSFileSegInfoToArray(AOCSFileSegInfo **allSegInfo, int totalsegs)
-{
-	AOCSFileSegInfo	  **segArray;
-
-	if (allSegInfo == NULL)
-		return NULL;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		AOCSFileSegInfo *seg;
-		seg = allSegInfo[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(allSegInfo);
-
-	return segArray;
-}
-
 /*
  * The comparison routine that sorts an array of AOCSFileSegInfos
  * in the ascending order of the segment number.
@@ -391,6 +350,7 @@ GetAllAOCSFileSegInfo_pg_aocsseg_rel(int numOfColumns,
 	null = (bool *) palloc(sizeof(bool) * Natts_pg_aocsseg);
 
 	cur_seg = 0;
+	segno2idx_init();
 
 	scan = systable_beginscan(pg_aocsseg_rel, InvalidOid, false, snapshot, 0, NULL);
 	while ((tup = systable_getnext(scan)) != NULL)
@@ -449,6 +409,7 @@ GetAllAOCSFileSegInfo_pg_aocsseg_rel(int numOfColumns,
 			if (dv != v)
 				pfree(dv);
 		}
+		segno2idx_set(aocs_seginfo->segno, cur_seg);
 		++cur_seg;
 	}
 
@@ -465,6 +426,9 @@ GetAllAOCSFileSegInfo_pg_aocsseg_rel(int numOfColumns,
 
 		return NULL;
 	}
+
+	/* store the total number of segs into SEGNO2IDX_MAP[SEGNO2IDX_MAP_NUM] */
+	segno2idx_set(SEGNO2IDX_MAP_NUM, *totalseg);
 
 	/*
 	 * Sort allseg by the order of segment file number.
@@ -1704,20 +1668,5 @@ FreeAllAOCSSegFileInfo(AOCSFileSegInfo **allAOCSSegInfo, int totalSegFiles)
 		Assert(allAOCSSegInfo[file_no] != NULL);
 
 		pfree(allAOCSSegInfo[file_no]);
-	}
-}
-
-void
-FreeAllAOCSSegFileInfoArray(AOCSFileSegInfo **allAOCSSegInfoArray)
-{
-	AOCSFileSegInfo *segInfo;
-
-	Assert(allAOCSSegInfoArray);
-
-	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; ++i)
-	{
-		segInfo = allAOCSSegInfoArray[i];
-		if (segInfo)
-			pfree(segInfo);
 	}
 }
