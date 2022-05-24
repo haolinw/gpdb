@@ -551,8 +551,15 @@ AppendOnlyBlockDirectory_GetEntry(
 		}
 	}
 
-	fsInfo = blockDirectory->segmentFileInfo[segmentFileNum];
-
+	// TODO, optimizable ?
+	for (int i = 0; i < 128 && (blockDirectory->segmentFileInfo + i != NULL); i++)
+	{
+		if (blockDirectory->segmentFileInfo[i]->segno == segmentFileNum)
+		{
+			fsInfo = blockDirectory->segmentFileInfo[i];
+			break;
+		}
+	}
 	Assert(fsInfo != NULL);
 
 	/*

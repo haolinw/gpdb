@@ -379,26 +379,6 @@ GetAllFileSegInfo(Relation parentrel,
 }
 
 FileSegInfo **
-GetAllFileSegInfoArray(Relation parentrel,
-					   Snapshot appendOnlyMetaDataSnapshot)
-{
-	FileSegInfo	  **segArray;
-	FileSegInfo	  **segs;
-	int 			totalsegs;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	segs = GetAllFileSegInfo(parentrel, appendOnlyMetaDataSnapshot, &totalsegs, NULL);
-
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		FileSegInfo *seg;
-		seg = segs[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(segs);
-
-	return segArray;
-}
-FileSegInfo **
 AllFileSegInfoToArray(FileSegInfo **allSegInfo, int totalsegs)
 {
 	FileSegInfo	  **segArray;
@@ -1707,20 +1687,22 @@ FreeAllSegFileInfo(FileSegInfo **allSegInfo, int totalSegFiles)
 	}
 }
 
-void
-FreeAllSegFileInfoArray(FileSegInfo **allSegInfoArray)
-{
-	FileSegInfo *segInfo;
+// TODO, optimizable ?
+// void
+// FreeAllSegFileInfoArray(FileSegInfo **allSegInfoArray)
+// {
+// 	FileSegInfo *segInfo;
 
-	Assert(allSegInfoArray);
+// 	Assert(allSegInfoArray);
 
-	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; ++i)
-	{
-		segInfo = allSegInfoArray[i];
-		if (segInfo)
-			pfree(segInfo);
-	}
-}
+// 	// TODO, optimizable ?
+// 	for (int i = 0; (allSegInfoArray + i) != NULL && (i < AOTupleId_MultiplierSegmentFileNum); ++i)
+// 	{
+// 		segInfo = allSegInfoArray[i];
+// 		if (segInfo)
+// 			pfree(segInfo);
+// 	}
+// }
 
 bool
 pg_aoseg_tuple_could_be_updated(Relation relation, HeapTuple tuple)

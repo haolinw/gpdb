@@ -2133,7 +2133,12 @@ appendonly_fetch_init(Relation relation,
 	/*
 	 * Get information about all the file segments we need to scan
 	 */
-	aoFetchDesc->segmentFileInfo = GetAllFileSegInfoArray(relation, appendOnlyMetaDataSnapshot);
+	aoFetchDesc->segmentFileInfo =
+		GetAllFileSegInfo(
+						  relation,
+						  appendOnlyMetaDataSnapshot,
+						  &aoFetchDesc->totalSegfiles,
+						  NULL);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,
@@ -2147,8 +2152,11 @@ appendonly_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aoFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aoFetchDesc->lastSequence[segno] = ReadLastSequence(aoFormData.segrelid, segno);
-		aoFetchDesc->firstRowNum[segno] = AOTupleId_MaxRowNum;
+		if (i >= 0)
+			aoFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 	}
+	for (int i = aoFetchDesc->totalSegfiles; i < AOTupleId_MultiplierSegmentFileNum; i++)
+		aoFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 
 	AppendOnlyStorageRead_Init(
 							   &aoFetchDesc->storageRead,
@@ -2434,11 +2442,19 @@ appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
 {
 	int				segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64			rowNum = AOTupleIdGet_rowNum(aoTupleId);
-	FileSegInfo	   *segInfo;
+	FileSegInfo	   *segInfo = NULL;
 	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry;
 	bool		isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
 
-	segInfo = aoFetchDesc->segmentFileInfo[segmentFileNum];
+	// TODO, optimizable ?
+	for (int i = 0; i < aoFetchDesc->totalSegfiles; i++)
+	{
+		if (aoFetchDesc->segmentFileInfo[i]->segno == segmentFileNum)
+		{
+			segInfo = aoFetchDesc->segmentFileInfo[i];
+			break;
+		}
+	}
 	Assert(segInfo);
 
 	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum] ||
@@ -2486,7 +2502,7 @@ appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 
 	if (aoFetchDesc->segmentFileInfo)
 	{
-		FreeAllSegFileInfoArray(aoFetchDesc->segmentFileInfo);
+		FreeAllSegFileInfo(aoFetchDesc->segmentFileInfo, aoFetchDesc->totalSegfiles);
 		pfree(aoFetchDesc->segmentFileInfo);
 		aoFetchDesc->segmentFileInfo = NULL;
 	}

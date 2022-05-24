@@ -302,45 +302,25 @@ GetAllAOCSFileSegInfo(Relation prel,
 	return results;
 }
 
-AOCSFileSegInfo **
-GetAllAOCSFileSegInfoArray(Relation prel,
-						   Snapshot appendOnlyMetaDataSnapshot)
-{
-	AOCSFileSegInfo	  **segArray;
-	AOCSFileSegInfo	  **segs;
-	int 				totalsegs;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
-	segs = GetAllAOCSFileSegInfo(prel, appendOnlyMetaDataSnapshot, &totalsegs, NULL);
+// TODO: optimizable ?
+// AOCSFileSegInfo **
+// AllAOCSFileSegInfoToArray(AOCSFileSegInfo **allSegInfo, int totalsegs)
+// {
+// 	AOCSFileSegInfo	  **segArray;
 
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		AOCSFileSegInfo *seg;
-		seg = segs[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(segs);
+// 	if (allSegInfo == NULL)
+// 		return NULL;
+// 	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
+// 	for (int i = 0; i < totalsegs; ++i)
+// 	{
+// 		AOCSFileSegInfo *seg;
+// 		seg = allSegInfo[i];
+// 		segArray[seg->segno] = seg;
+// 	}
+// 	pfree(allSegInfo);
 
-	return segArray;
-}
-
-AOCSFileSegInfo **
-AllAOCSFileSegInfoToArray(AOCSFileSegInfo **allSegInfo, int totalsegs)
-{
-	AOCSFileSegInfo	  **segArray;
-
-	if (allSegInfo == NULL)
-		return NULL;
-	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
-	for (int i = 0; i < totalsegs; ++i)
-	{
-		AOCSFileSegInfo *seg;
-		seg = allSegInfo[i];
-		segArray[seg->segno] = seg;
-	}
-	pfree(allSegInfo);
-
-	return segArray;
-}
+// 	return segArray;
+// }
 
 /*
  * The comparison routine that sorts an array of AOCSFileSegInfos
@@ -1707,17 +1687,19 @@ FreeAllAOCSSegFileInfo(AOCSFileSegInfo **allAOCSSegInfo, int totalSegFiles)
 	}
 }
 
-void
-FreeAllAOCSSegFileInfoArray(AOCSFileSegInfo **allAOCSSegInfoArray)
-{
-	AOCSFileSegInfo *segInfo;
+// TODO, optimizable ?
+// void
+// FreeAllAOCSSegFileInfoArray(AOCSFileSegInfo **allAOCSSegInfoArray)
+// {
+// 	AOCSFileSegInfo *segInfo;
 
-	Assert(allAOCSSegInfoArray);
+// 	Assert(allAOCSSegInfoArray);
 
-	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; ++i)
-	{
-		segInfo = allAOCSSegInfoArray[i];
-		if (segInfo)
-			pfree(segInfo);
-	}
-}
+// 	// TODO, optimizable ?
+// 	for (int i = 0; (allAOCSSegInfoArray + i) != NULL && (i < AOTupleId_MultiplierSegmentFileNum); ++i)
+// 	{
+// 		segInfo = allAOCSSegInfoArray[i];
+// 		if (segInfo)
+// 			pfree(segInfo);
+// 	}
+// }

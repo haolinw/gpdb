@@ -508,15 +508,17 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 			AccessShareLock,
 			appendOnlyMetaDataSnapshot);
 
-	if (RelationIsAoRows(aoRelation))
-	{
-		segmentFileInfo = AllFileSegInfoToArray(segmentFileInfo, totalSegfiles);
-	}
-	else
-	{
-		segmentFileInfo = (FileSegInfo **) AllAOCSFileSegInfoToArray(
-				(AOCSFileSegInfo **)segmentFileInfo, totalSegfiles);
-	}
+	// TODO, optimizable ?
+	// if (RelationIsAoRows(aoRelation))
+	// {
+	// 	segmentFileInfo = GetAllFileSegInfo(aoRelation, appendOnlyMetaDataSnapshot, totalSegfiles);
+	// }
+	// else
+	// {
+	// 	segmentFileInfo = (FileSegInfo **) GetAllAOCSFileSegInfo(aoRelation, 
+	// 			(AOCSFileSegInfo **)segmentFileInfo, totalSegfiles);
+	// }
+	
 	AppendOnlyBlockDirectory_Init_forSearch(&vacuumIndexState.blockDirectory,
 			appendOnlyMetaDataSnapshot,
 			segmentFileInfo,
@@ -567,11 +569,11 @@ vacuum_appendonly_indexes(Relation aoRelation, int options,
 	{
 		if (RelationIsAoRows(aoRelation))
 		{
-			FreeAllSegFileInfoArray(segmentFileInfo);
+			FreeAllSegFileInfo(segmentFileInfo, totalSegfiles);
 		}
 		else
 		{
-			FreeAllAOCSSegFileInfoArray((AOCSFileSegInfo **)segmentFileInfo);
+			FreeAllAOCSSegFileInfo((AOCSFileSegInfo **)segmentFileInfo, totalSegfiles);
 		}
 		pfree(segmentFileInfo);
 	}
