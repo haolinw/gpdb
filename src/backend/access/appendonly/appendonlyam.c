@@ -2133,12 +2133,7 @@ appendonly_fetch_init(Relation relation,
 	/*
 	 * Get information about all the file segments we need to scan
 	 */
-	aoFetchDesc->segmentFileInfo =
-		GetAllFileSegInfoArray(
-						  relation,
-						  appendOnlyMetaDataSnapshot,
-						  &aoFetchDesc->totalSegfiles,
-						  NULL);
+	aoFetchDesc->segmentFileInfo = GetAllFileSegInfoArray(relation, appendOnlyMetaDataSnapshot);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,

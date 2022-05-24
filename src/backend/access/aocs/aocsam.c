@@ -1334,8 +1334,7 @@ aocs_fetch_init(Relation relation,
                                  &checksum,
                                  NULL);
 
-	aocsFetchDesc->segmentFileInfo =
-		GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot, &aocsFetchDesc->totalSegfiles, NULL);
+	aocsFetchDesc->segmentFileInfo = GetAllAOCSFileSegInfoArray(relation, appendOnlyMetaDataSnapshot);
 
 	/* 
 	 * Initialize lastSequence only for segments which we got above is sufficient,

@@ -310,7 +310,7 @@ GetAllAOCSFileSegInfoArray(Relation prel,
 	AOCSFileSegInfo	  **segs;
 	int 				totalsegs;
 	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(AOCSFileSegInfo *));
-	segs = GetAllAOCSFileSegInfo(prel, appendOnlyMetaDataSnapshot, &totalsegs);
+	segs = GetAllAOCSFileSegInfo(prel, appendOnlyMetaDataSnapshot, &totalsegs, NULL);
 
 	for (int i = 0; i < totalsegs; ++i)
 	{

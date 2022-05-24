@@ -386,7 +386,7 @@ GetAllFileSegInfoArray(Relation parentrel,
 	FileSegInfo	  **segs;
 	int 			totalsegs;
 	segArray = palloc0(AOTupleId_MultiplierSegmentFileNum * sizeof(FileSegInfo *));
-	segs = GetAllFileSegInfo(parentrel, appendOnlyMetaDataSnapshot, &totalsegs);
+	segs = GetAllFileSegInfo(parentrel, appendOnlyMetaDataSnapshot, &totalsegs, NULL);
 
 	for (int i = 0; i < totalsegs; ++i)
 	{

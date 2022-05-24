@@ -731,7 +731,7 @@ aocs_tid_visible(struct IndexFetchTableData *scan,
 		 * between calls? Add a sanity check for that here. */
 	}
 
-	return aocs_tuple_visible(aocoscan->aocofetch, tid);
+	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
 
 static void
