@@ -460,6 +460,18 @@ typedef struct ViewOptions
 		relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 
 /*
+ * Convenient macro for checking AO AMs
+ *
+ * IsAccessMethodAO
+ * RelationAMIsAO
+ * 		True iff relam is ao_row or or ao_column.
+ */
+#define IsAccessMethodAO(am_oid) \
+	((am_oid) == AO_ROW_TABLE_AM_OID || (am_oid) == AO_COLUMN_TABLE_AM_OID)
+#define RelationAMIsAO(relation) \
+	IsAccessMethodAO((relation)->rd_rel->relam)
+
+/*
  * RelationIsBitmapIndex
  *      True iff relation is a bitmap index
  */

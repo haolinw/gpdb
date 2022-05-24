@@ -333,9 +333,11 @@ typedef struct TableAmRoutine
 											 ItemPointer tid,
 											 Snapshot snapshot,
 											 bool *all_dead);
-	bool		(*tid_visible) (struct IndexFetchTableData *scan,
-								ItemPointer tid,
-								Snapshot snapshot);
+
+	bool		(*index_tid_visible) (struct IndexFetchTableData *scan,
+									  ItemPointer tid,
+									  Snapshot snapshot,
+									  void *extra);
 
 	/* ------------------------------------------------------------------------
 	 * Callbacks for non-modifying operations on individual tuples
@@ -1087,6 +1089,15 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 	return scan->rel->rd_tableam->index_fetch_tuple(scan, tid, snapshot,
 													slot, call_again,
 													all_dead);
+}
+
+static inline bool
+table_index_tid_visible(struct IndexFetchTableData *scan,
+						ItemPointer tid,
+						Snapshot snapshot,
+						void *extra)
+{
+	return scan->rel->rd_tableam->index_tid_visible(scan, tid, snapshot, extra);
 }
 
 /*
