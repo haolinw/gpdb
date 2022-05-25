@@ -2378,7 +2378,7 @@ appendonly_fetch(AppendOnlyFetchDesc aoFetchDesc,
 
 	if (!aoFetchDesc->currentSegmentFile.isOpen)
 	{
-		if (!openFetchSegmentFile(
+		if (!openFetchSegmentFile( // TODO, optimizable ?
 								  aoFetchDesc,
 								  segmentFileNum))
 		{
