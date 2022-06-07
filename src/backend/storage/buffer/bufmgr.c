@@ -2521,26 +2521,44 @@ DropDatabaseBuffers(Oid dbid)
  *		use only.
  * -----------------------------------------------------------------
  */
-#ifdef NOT_USED
 void
-PrintBufferDescs(void)
+PrintBufferDescs(Oid relfilenode)
 {
 	int			i;
 	volatile BufferDesc *buf = BufferDescriptors;
 
-	for (i = 0; i < NBuffers; ++i, ++buf)
+	if (OidIsValid(relfilenode))
 	{
-		/* theoretically we should lock the bufhdr here */
-		elog(LOG,
-			 "[%02d] (freeNext=%d, rel=%s, "
-			 "blockNum=%u, flags=0x%x, refcount=%u %d)",
-			 i, buf->freeNext,
-		  relpathbackend(buf->tag.rnode, InvalidBackendId, buf->tag.forkNum),
-			 buf->tag.blockNum, buf->flags,
-			 buf->refcount, PrivateRefCount[i]);
+		for (i = 0; i < NBuffers; ++i, ++buf)
+		{
+			if (buf->tag.rnode.relNode != relfilenode)
+				continue;
+
+			/* theoretically we should lock the bufhdr here */
+			elog(LOG,
+				"[%02d] (freeNext=%d, rel=%s, "
+				"blockNum=%u, flags=0x%x, refcount=%u %d)",
+				i, buf->freeNext,
+			relpathbackend(buf->tag.rnode, InvalidBackendId, buf->tag.forkNum),
+				buf->tag.blockNum, buf->flags,
+				buf->refcount, PrivateRefCount[i]);
+		}
+	}
+	else
+	{
+		for (i = 0; i < NBuffers; ++i, ++buf)
+		{
+			/* theoretically we should lock the bufhdr here */
+			elog(LOG,
+				"[%02d] (freeNext=%d, rel=%s, "
+				"blockNum=%u, flags=0x%x, refcount=%u %d)",
+				i, buf->freeNext,
+			relpathbackend(buf->tag.rnode, InvalidBackendId, buf->tag.forkNum),
+				buf->tag.blockNum, buf->flags,
+				buf->refcount, PrivateRefCount[i]);
+		}
 	}
 }
-#endif
 
 #ifdef NOT_USED
 void

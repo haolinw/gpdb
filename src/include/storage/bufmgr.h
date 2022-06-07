@@ -236,4 +236,6 @@ extern void AtProcExit_LocalBuffers(void);
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+extern void PrintBufferDescs(Oid relfilenode);
+
 #endif

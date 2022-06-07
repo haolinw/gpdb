@@ -30,6 +30,7 @@
 #include "executor/spi.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
+#include "storage/bufmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/int8.h"
@@ -977,6 +978,8 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 
 	if (!OidIsValid(result))
 		PG_RETURN_NULL();
+
+	PrintBufferDescs(result);
 
 	PG_RETURN_OID(result);
 }
