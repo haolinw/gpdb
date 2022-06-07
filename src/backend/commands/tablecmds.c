@@ -5611,6 +5611,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode)
 			Oid			NewAccessMethod;
 			Oid			NewTableSpace;
 			char		persistence;
+			TransactionId relfrozenxid;
 
 			OldHeap = table_open(tab->relid, NoLock);
 
@@ -5720,13 +5721,21 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode)
 			 * over to our original pg_class tuple. We do not want to do this
 			 * in the case of ALTER TABLE rewrites as the temp relfile will
 			 * not have correct stats.
+			 *
+			 * GPDB: Since pg_class.relfrozenxid doesn't mean anything for
+			 * AO/AOCO tables, and should not be set, pass in
+			 * InvalidTransactionId instead of RecentXmin.
 			 */
+			if (NewAccessMethod == AO_ROW_TABLE_AM_OID || NewAccessMethod == AO_COLUMN_TABLE_AM_OID)
+				relfrozenxid = InvalidTransactionId;
+			else
+				relfrozenxid = RecentXmin;
 			finish_heap_swap(tab->relid, OIDNewHeap,
 							 false, false,
 							 false /* swap_stats */,
 							 true,
 							 !OidIsValid(tab->newTableSpace),
-							 RecentXmin,
+							 relfrozenxid,
 							 ReadNextMultiXactId(),
 							 persistence);
 		}
@@ -6306,16 +6315,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		scan = table_beginscan(oldrel, snapshot, 0, NULL);
 
 		if (newrel && RelationIsAoRows(newrel))
-		{
-			/* Table access method is not permitted to change */
-			Assert(RelationIsAoRows(oldrel));
 			appendonly_dml_init(newrel, CMD_INSERT);
-		}
 		else if (newrel && RelationIsAoCols(newrel))
-		{
-			Assert(RelationIsAoCols(oldrel));
 			aoco_dml_init(newrel, CMD_INSERT);
-		}
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -14076,6 +14078,35 @@ ATPrepSetAccessMethod(AlteredTableInfo *tab, Relation rel, const char *amname)
 
 	if (rel->rd_rel->relam == amoid)
 		return;
+
+/*
+ * Since we don't support unique indexes for AO/AOCO tables, ban
+ * heap->AO/AOCO in case the heap table has a unique index.
+ */
+	if (rel->rd_rel->relam == HEAP_TABLE_AM_OID &&
+		(amoid == AO_ROW_TABLE_AM_OID || amoid == AO_COLUMN_TABLE_AM_OID))
+	{
+		List	   *indexoidlist;
+		ListCell   *l;
+		indexoidlist = RelationGetIndexList(rel);
+		foreach(l, indexoidlist)
+		{
+			Oid			indexoid = lfirst_oid(l);
+			HeapTuple	indexTuple;
+			Form_pg_index indexStruct;
+
+			indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+			if (!HeapTupleIsValid(indexTuple))
+				elog(ERROR, "cache lookup failed for index %u", indexoid);
+			indexStruct = (Form_pg_index) GETSTRUCT(indexTuple);
+			if (indexStruct->indisunique)
+				ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("append-only tables do not support unique indexes"),
+					errdetail("heap table \"%s\" being altered contains unique index", RelationGetRelationName(rel))));
+			ReleaseSysCache(indexTuple);
+		}
+		list_free(indexoidlist);
+	}
 
 	/* Save info for Phase 3 to do the real work */
 	tab->rewrite |= AT_REWRITE_ACCESS_METHOD;
