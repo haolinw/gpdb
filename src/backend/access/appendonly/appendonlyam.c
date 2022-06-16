@@ -2762,6 +2762,8 @@ aoInsertDesc->appendOnlyMetaDataSnapshot, //CONCERN:Safe to assume all block dir
 											aoInsertDesc->fsInfo, aoInsertDesc->lastSequence,
 											rel, segno, 1, false);
 
+	aoInsertDesc->segrelid = segrelid;
+
 	return aoInsertDesc;
 }
 
@@ -2976,17 +2978,10 @@ appendonly_insert(AppendOnlyInsertDesc aoInsertDesc,
 	 */
 	if (aoInsertDesc->numSequences == 0)
 	{
-		int64		firstSequence;
-		Oid segrelid;
-
-		GetAppendOnlyEntryAuxOids(aoInsertDesc->aoi_rel->rd_id, NULL,
-				&segrelid, NULL, NULL, NULL, NULL);
-
-		firstSequence =
-			GetFastSequences(segrelid,
-							 aoInsertDesc->cur_segno,
-							 aoInsertDesc->lastSequence + 1,
-							 NUM_FAST_SEQUENCES);
+		int64 firstSequence = GetFastSequences(aoInsertDesc->segrelid,
+											   aoInsertDesc->cur_segno,
+											   aoInsertDesc->lastSequence + 1,
+											   NUM_FAST_SEQUENCES);
 
 		Assert(firstSequence == aoInsertDesc->lastSequence + 1);
 		aoInsertDesc->numSequences = NUM_FAST_SEQUENCES;
