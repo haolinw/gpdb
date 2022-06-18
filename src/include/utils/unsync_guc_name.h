@@ -172,6 +172,7 @@
 		"gp_dispatch_keepalives_idle",
 		"gp_dispatch_keepalives_interval",
 		"gp_dispatch_keepalives_count",
+		"gp_num_fast_sequences",
 		"gp_distinct_grouping_sets_threshold",
 		"gp_dtx_recovery_interval",
 		"gp_dtx_recovery_prepared_period",

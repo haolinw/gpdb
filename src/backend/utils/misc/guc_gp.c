@@ -4112,6 +4112,17 @@ struct config_int ConfigureNamesInt_gp[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"gp_num_fast_sequences", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Set the number of local fast sequences."),
+			gettext_noop("A value of 0 uses the system default."),
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_num_fast_sequences,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL
