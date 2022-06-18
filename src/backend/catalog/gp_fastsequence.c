@@ -25,6 +25,8 @@
 #include "access/heapam.h"
 #include "utils/syscache.h"
 
+int gp_num_fast_sequences = 100;
+
 static void insert_or_update_fastsequence(
 	Relation gp_fastsequence_rel,
 	HeapTuple oldTuple,

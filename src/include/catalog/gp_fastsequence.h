@@ -40,7 +40,8 @@ FOREIGN_KEY(objid REFERENCES pg_class(oid));
 */
 typedef FormData_gp_fastsequence *Form_gp_fastsequence;
 
-#define NUM_FAST_SEQUENCES					 100
+#define NUM_FAST_SEQUENCES	(gp_num_fast_sequences > 0 ? gp_num_fast_sequences : 100)
+
 extern void InsertInitialFastSequenceEntries(Oid objid);
 
 /*

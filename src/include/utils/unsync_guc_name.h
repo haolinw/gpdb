@@ -169,6 +169,7 @@
 		"gp_dbid",
 		"gp_debug_pgproc",
 		"gp_debug_resqueue_priority",
+		"gp_num_fast_sequences",
 		"gp_dispatch_keepalives_count",
 		"gp_dispatch_keepalives_idle",
 		"gp_dispatch_keepalives_interval",
