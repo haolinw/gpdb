@@ -2555,7 +2555,6 @@ appendonly_insert_init(Relation rel, int segno)
 	AppendOnlyStorageAttributes *attr;
 
 	StringInfoData titleBuf;
-	Oid segrelid;
 	int32 blocksize;
 	int32 safefswritesize;
 	int16 compresslevel;
@@ -2739,11 +2738,11 @@ appendonly_insert_init(Relation rel, int segno)
 	 */
 	Assert(aoInsertDesc->fsInfo->segno == segno);
 
-	GetAppendOnlyEntryAuxOids(aoInsertDesc->aoi_rel->rd_id, NULL, &segrelid,
+	GetAppendOnlyEntryAuxOids(aoInsertDesc->aoi_rel->rd_id, NULL, &aoInsertDesc->segrelid,
 			NULL, NULL, NULL, NULL);
 
 	firstSequence =
-		GetFastSequences(segrelid,
+		GetFastSequences(aoInsertDesc->segrelid,
 						 segno,
 						 aoInsertDesc->rowCount + 1,
 						 NUM_FAST_SEQUENCES);
@@ -2761,8 +2760,6 @@ appendonly_insert_init(Relation rel, int segno)
 aoInsertDesc->appendOnlyMetaDataSnapshot, //CONCERN:Safe to assume all block directory entries for segment are "covered" by same exclusive lock.
 											aoInsertDesc->fsInfo, aoInsertDesc->lastSequence,
 											rel, segno, 1, false);
-
-	aoInsertDesc->segrelid = segrelid;
 
 	return aoInsertDesc;
 }
