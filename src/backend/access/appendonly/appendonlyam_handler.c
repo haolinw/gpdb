@@ -1250,7 +1250,7 @@ appendonly_index_build_range_scan(Relation heapRelation,
 
 
 	/* GPDB_12_MERGE_FIXME */
-#if 0
+#if 1
 	/* Publish number of blocks to scan */
 	if (progress)
 	{
@@ -1314,7 +1314,7 @@ appendonly_index_build_range_scan(Relation heapRelation,
 			continue;
 
 	/* GPDB_12_MERGE_FIXME */
-#if 0
+#if 1
 		/* Report scan progress, if asked to. */
 		if (progress)
 		{
@@ -1379,7 +1379,7 @@ appendonly_index_build_range_scan(Relation heapRelation,
 	}
 
 	/* GPDB_12_MERGE_FIXME */
-#if 0
+#if 1
 	/* Report scan progress one last time. */
 	if (progress)
 	{
@@ -1478,7 +1478,7 @@ appendonly_index_validate_scan(Relation heapRelation,
 	aoscan = (AppendOnlyScanDesc) scan;
 
 	/* GPDB_12_MERGE_FIXME */
-#if 0
+#if 1
 	pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_TOTAL,
 								 aoscan->rs_nblocks);
 #endif
@@ -1497,7 +1497,7 @@ appendonly_index_validate_scan(Relation heapRelation,
 		state->htups += 1;
 
 	/* GPDB_12_MERGE_FIXME */
-#if 0
+#if 1
 		if ((previous_blkno == InvalidBlockNumber) ||
 			(aoscan->rs_cblock != previous_blkno))
 		{
