@@ -171,13 +171,13 @@ static int vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset
  *
  * 	return the bitmapset of dropped pendingDrop segment.
  */
-Bitmapset *
-ao_vacuum_rel_pre_cleanup(Relation onerel, int options, VacuumParams *params,
-						  BufferAccessStrategy bstrategy)
+static void
+ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	char	   *relname;
 	int			elevel;
 	Bitmapset	*dropped_segs;
+	int			options = params->options;
 
 	if (options & VACOPT_VERBOSE)
 		elevel = INFO;
@@ -209,29 +209,61 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, int options, VacuumParams *params,
 	AppendOptimizedRecycleDeadSegments(onerel, &dropped_segs);
 
 	/*
+	 * Vacuum indexes only when we do find AWAITING_DROP segments,
+	 * no need to update stats in pre_cleanup phase.
+	 */
+	if (dropped_segs != NULL)
+	{
+		/*
+		 * Do index vacuuming before dropping dead segments for data
+		 * consistency and crash safety. If dropping dead segments before
+		 * cleaning up index tuples, the following issues may occur:
+		 * 
+		 * a) The dead segment file becomes available as soon as dropping
+		 * complete. Concurrent inserts may fill it with new tuples hence
+		 * might be deleted soon in the following index vacuuming;
+		 * 
+		 * b) Crash happens in-between AppendOptimizedRecycleDeadSegments()
+		 * and vacuum_appendonly_indexes() result in losing the opportunity
+		 * to clean index entries fully as a state for which index tuples
+		 * to delete will be lost in this case.
+		 * 
+		 * So make sure to vacuum indexs to be based on persistent information
+		 * (AWAITING_DROP state in pg_aoseg) to cleanup dead index tuples
+		 * effectively.
+		 */
+		vacuum_appendonly_indexes(onerel, options, dropped_segs, bstrategy);
+		/*
+		 * Assuming no transaction is able to access the dead segments as it
+		 * has been already marked as AWAITING_DROP, no lock will be held in
+		 * clearing segment info.
+		 */
+		AppendOptimizedResetDeadSegments(onerel, dropped_segs);
+		bms_free(dropped_segs);
+	}
+
+	/*
 	 * Also truncate all live segments to the EOF values stored in pg_aoseg.
 	 * This releases space left behind by aborted inserts.
 	 */
 	AppendOptimizedTruncateToEOF(onerel);
-
-	return dropped_segs;
 }
 
 
-void
-ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
-						   BufferAccessStrategy bstrategy, Bitmapset *pre_dropped_segs)
+static void
+ao_vacuum_rel_post_cleanup(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	BlockNumber	relpages;
 	double		reltuples;
 	bool		relhasindex;
 	int			elevel;
+	int			options = params->options;
 	TransactionId OldestXmin;
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
-	Bitmapset	*new_dropped_segs, *all_dropped_segs;
+	Bitmapset	*dropped_segs;
 
 	if (options & VACOPT_VERBOSE)
 		elevel = INFO;
@@ -241,26 +273,23 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 	if (Gp_role == GP_ROLE_DISPATCH)
 		elevel = DEBUG2; /* vacuum and analyze messages aren't interesting from the QD */
 
-	/*-----
+	/*
 	 * This could run in a *local* transaction:
 	 *
 	 * 1. Recycled any dead AWAITING_DROP segments, like in the
 	 *    pre-cleanup phase.
 	 *
 	 * 2. Vacuum indexes.
-	 *----
+	 * 
+	 * 3. Reset dead segments.
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	AppendOptimizedRecycleDeadSegments(onerel, &new_dropped_segs);
-
-	all_dropped_segs = bms_union(pre_dropped_segs, new_dropped_segs);
-
-	vacuum_appendonly_indexes(onerel, options, all_dropped_segs, bstrategy);
-
-	bms_free(pre_dropped_segs);
-	bms_free(new_dropped_segs);
-	bms_free(all_dropped_segs);
+	AppendOptimizedRecycleDeadSegments(onerel, &dropped_segs);
+	/* Vacuum indexes and update stats in post_cleanup phases. */
+	vacuum_appendonly_indexes(onerel, options, dropped_segs, bstrategy);
+	AppendOptimizedResetDeadSegments(onerel, dropped_segs);
+	bms_free(dropped_segs);
 
 	/* Update statistics in pg_class */
 	vacuum_appendonly_fill_stats(onerel, GetActiveSnapshot(),
@@ -289,9 +318,8 @@ ao_vacuum_rel_post_cleanup(Relation onerel, int options, VacuumParams *params,
 						true /* isvacuum */);
 }
 
-void
-ao_vacuum_rel_compact(Relation onerel, int options, VacuumParams *params,
-					  BufferAccessStrategy bstrategy)
+static void
+ao_vacuum_rel_compact(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	int			compaction_segno;
 	int			insert_segno;
@@ -300,6 +328,7 @@ ao_vacuum_rel_compact(Relation onerel, int options, VacuumParams *params,
 	Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
 	char	   *relname;
 	int			elevel;
+	int			options = params->options;
 
 	/*
 	 * This should run in a distributed transaction. But also allow utility
@@ -388,8 +417,6 @@ ao_vacuum_rel_compact(Relation onerel, int options, VacuumParams *params,
 void
 ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
-	Bitmapset *dropped_segs = NULL;
-
 	Assert(RelationIsAppendOptimized(rel));
 	Assert(params != NULL);
 
@@ -399,11 +426,11 @@ ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy
 	 * Do the actual work --- either FULL or "lazy" vacuum
 	 */
 	if (ao_vacuum_phase == VACOPT_AO_PRE_CLEANUP_PHASE)
-		dropped_segs = ao_vacuum_rel_pre_cleanup(rel, params->options, params, bstrategy);
+		ao_vacuum_rel_pre_cleanup(rel, params, bstrategy);
 	else if (ao_vacuum_phase == VACOPT_AO_COMPACT_PHASE)
-		ao_vacuum_rel_compact(rel, params->options, params, bstrategy);
+		ao_vacuum_rel_compact(rel, params, bstrategy);
 	else if (ao_vacuum_phase == VACOPT_AO_POST_CLEANUP_PHASE)
-		ao_vacuum_rel_post_cleanup(rel, params->options, params, bstrategy, dropped_segs);
+		ao_vacuum_rel_post_cleanup(rel, params, bstrategy);
 	else
 		/* Do nothing here, we will launch the stages later */
 		Assert(ao_vacuum_phase == 0);

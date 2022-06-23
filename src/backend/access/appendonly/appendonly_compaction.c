@@ -491,6 +491,38 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
 }
 
 /*
+ * Reset AWAITING_DROP segments.
+ * 
+ * Callers should guarantee that the segfile is no longer needed by any
+ * running transaction. It is not necessary to hold a lock on the segfile
+ * row, though.
+ */
+static inline void
+AppendOptimizedResetDeadSegment(Relation aorel, int segno)
+{
+	if (RelationIsAoRows(aorel))
+	{
+		AppendOnlyCompaction_DropSegmentFile(aorel, segno);
+		ClearFileSegInfo(aorel, segno);
+	}
+	else
+	{
+		AOCSCompaction_DropSegmentFile(aorel, segno);
+		ClearAOCSFileSegInfo(aorel, segno);
+	}
+}
+
+void
+AppendOptimizedResetDeadSegments(Relation aorel, Bitmapset *segnos)
+{
+	int segno;
+
+	segno = -1;
+	while ((segno = bms_next_member(segnos, segno)) >= 0)
+		AppendOptimizedResetDeadSegment(aorel, segno);
+}
+
+/*
  * Recycle AWAITING_DROP segments and return the segment numbers dropped.
  *
  * This tries to acquire an AccessExclusiveLock on the table, if it's
@@ -607,18 +639,9 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 			continue;
 
 		/* all set! */
-		if (RelationIsAoRows(aorel))
-		{
-			AppendOnlyCompaction_DropSegmentFile(aorel, segno);
-			ClearFileSegInfo(aorel, segno);
-		}
+		if (dropped_segs == NULL)
+			AppendOptimizedResetDeadSegment(aorel, segno);
 		else
-		{
-			AOCSCompaction_DropSegmentFile(aorel, segno);
-			ClearAOCSFileSegInfo(aorel, segno);
-		}
-
-		if (dropped_segs != NULL)
 			*dropped_segs = bms_add_member(*dropped_segs, segno);
 	}
 	systable_endscan(aoscan);
