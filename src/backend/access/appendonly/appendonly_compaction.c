@@ -498,7 +498,7 @@ AppendOnlySegmentFileFullCompaction(Relation aorel,
  * row, though.
  */
 static inline void
-AppendOptimizedResetDeadSegment(Relation aorel, int segno)
+AppendOptimizedDropDeadSegment(Relation aorel, int segno)
 {
 	if (RelationIsAoRows(aorel))
 	{
@@ -513,24 +513,24 @@ AppendOptimizedResetDeadSegment(Relation aorel, int segno)
 }
 
 void
-AppendOptimizedResetDeadSegments(Relation aorel, Bitmapset *segnos)
+AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos)
 {
 	int segno;
 
 	segno = -1;
 	while ((segno = bms_next_member(segnos, segno)) >= 0)
-		AppendOptimizedResetDeadSegment(aorel, segno);
+		AppendOptimizedDropDeadSegment(aorel, segno);
 }
 
 /*
- * Recycle AWAITING_DROP segments and return the segment numbers dropped.
+ * Recycle AWAITING_DROP segments and return the dead segment numbers.
  *
  * This tries to acquire an AccessExclusiveLock on the table, if it's
  * available. If it's not, no segments are dropped.
  *
  */
 void
-AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
+AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **collect_dead_segs)
 {
 	Relation	pg_aoseg_rel;
 	TupleDesc	pg_aoseg_dsc;
@@ -543,8 +543,8 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 
 	Assert(RelationIsAppendOptimized(aorel));
 
-	if (dropped_segs != NULL)
-		*dropped_segs = NULL;
+	if (collect_dead_segs != NULL)
+		*collect_dead_segs = NULL;
 
 	/*
 	 * The algorithm below for choosing a target segment is not concurrent-safe.
@@ -579,7 +579,9 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 											  pg_aoseg_dsc, &isNull));
 			Assert(!isNull);
 
-			state = fastgetattr(tuple, Anum_pg_aoseg_state, pg_aoseg_dsc, &isNull);
+			state = DatumGetInt16(fastgetattr(tuple,
+											  Anum_pg_aoseg_state,
+											  pg_aoseg_dsc, &isNull));
 			Assert(!isNull);
 		}
 		else
@@ -639,10 +641,10 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **dropped_segs)
 			continue;
 
 		/* all set! */
-		if (dropped_segs == NULL)
-			AppendOptimizedResetDeadSegment(aorel, segno);
+		if (collect_dead_segs == NULL)
+			AppendOptimizedDropDeadSegment(aorel, segno);
 		else
-			*dropped_segs = bms_add_member(*dropped_segs, segno);
+			*collect_dead_segs = bms_add_member(*collect_dead_segs, segno);
 	}
 	systable_endscan(aoscan);
 

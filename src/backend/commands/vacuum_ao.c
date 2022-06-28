@@ -141,19 +141,10 @@
 #include "utils/pg_rusage.h"
 #include "cdb/cdbappendonlyblockdirectory.h"
 
-/*
- * State information used during the vacuum of indexes on append-only tables
- */
-typedef struct AppendOnlyIndexVacuumState
-{
-	AppendOnlyVisimap visiMap;
-	AppendOnlyBlockDirectory blockDirectory;
-	AppendOnlyBlockDirectoryEntry blockDirectoryEntry;
-} AppendOnlyIndexVacuumState;
 
 static void vacuum_appendonly_index(Relation indexRelation,
 									double rel_tuple_count,
-									Bitmapset *dropped_seg,
+									Bitmapset *dead_segs,
 									int elevel,
 									BufferAccessStrategy bstrategy);
 
@@ -162,21 +153,15 @@ static bool appendonly_tid_reaped(ItemPointer itemptr, void *state);
 static void vacuum_appendonly_fill_stats(Relation aorel, Snapshot snapshot, int elevel,
 										 BlockNumber *rel_pages, double *rel_tuples,
 										 bool *relhasindex);
-static int vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_segnos,
+static int vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dead_segs,
 									 BufferAccessStrategy bstrategy);
 
-
-/*
- * ao_vacuum_rel_pre_cleanup
- *
- * 	return the bitmapset of dropped pendingDrop segment.
- */
 static void
 ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	char	   *relname;
 	int			elevel;
-	Bitmapset	*dropped_segs;
+	Bitmapset	*dead_segs;
 	int			options = params->options;
 
 	if (options & VACOPT_VERBOSE)
@@ -187,11 +172,17 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStr
 	if (Gp_role == GP_ROLE_DISPATCH)
 		elevel = DEBUG2; /* vacuum and analyze messages aren't interesting from the QD */
 
+	relname = RelationGetRelationName(onerel);
+	ereport(elevel,
+			(errmsg("vacuuming \"%s.%s\"",
+					get_namespace_name(RelationGetNamespace(onerel)),
+					relname)));
+
 	/*
-	 * Truncate AWAITING_DROP segments that are no longer visible to anyone
-	 * to 0 bytes. We cannot actually remove them yet, because there might
-	 * still be index entries pointing to them. We cannot recycle the segments
-	 * until the indexes have been vacuumed.
+	 * Collect AWAITING_DROP segments that are no longer visible to anyone.
+	 * We cannot actually remove them yet, because there might still be index
+	 * entries pointing to them. We cannot recycle the segments until the
+	 * indexes have been vacuumed.
 	 *
 	 * This is optional. We'll drop old AWAITING_DROP segments in the
 	 * post-cleanup phase, too, but doing this first helps to reclaim some
@@ -199,20 +190,13 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStr
 	 *
 	 * This could run in a local transaction.
 	 */
-
-	relname = RelationGetRelationName(onerel);
-	ereport(elevel,
-			(errmsg("vacuuming \"%s.%s\"",
-					get_namespace_name(RelationGetNamespace(onerel)),
-					relname)));
-
-	AppendOptimizedRecycleDeadSegments(onerel, &dropped_segs);
+	AppendOptimizedRecycleDeadSegments(onerel, &dead_segs);
 
 	/*
 	 * Vacuum indexes only when we do find AWAITING_DROP segments,
 	 * no need to update stats in pre_cleanup phase.
 	 */
-	if (dropped_segs != NULL)
+	if (dead_segs != NULL)
 	{
 		/*
 		 * Do index vacuuming before dropping dead segments for data
@@ -232,14 +216,15 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStr
 		 * (AWAITING_DROP state in pg_aoseg) to cleanup dead index tuples
 		 * effectively.
 		 */
-		vacuum_appendonly_indexes(onerel, options, dropped_segs, bstrategy);
+		vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
 		/*
+		 * Truncate AWAITING_DROP the above collected segments to 0 byte.
 		 * Assuming no transaction is able to access the dead segments as it
 		 * has been already marked as AWAITING_DROP, no lock will be held in
 		 * clearing segment info.
 		 */
-		AppendOptimizedResetDeadSegments(onerel, dropped_segs);
-		bms_free(dropped_segs);
+		AppendOptimizedDropDeadSegments(onerel, dead_segs);
+		bms_free(dead_segs);
 	}
 
 	/*
@@ -263,7 +248,7 @@ ao_vacuum_rel_post_cleanup(Relation onerel, VacuumParams *params, BufferAccessSt
 	MultiXactId MultiXactCutoff;
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
-	Bitmapset	*dropped_segs;
+	Bitmapset	*dead_segs;
 
 	if (options & VACOPT_VERBOSE)
 		elevel = INFO;
@@ -281,15 +266,15 @@ ao_vacuum_rel_post_cleanup(Relation onerel, VacuumParams *params, BufferAccessSt
 	 *
 	 * 2. Vacuum indexes.
 	 * 
-	 * 3. Reset dead segments.
+	 * 3. Drop/Truncate dead segments.
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	AppendOptimizedRecycleDeadSegments(onerel, &dropped_segs);
+	AppendOptimizedRecycleDeadSegments(onerel, &dead_segs);
 	/* Vacuum indexes and update stats in post_cleanup phases. */
-	vacuum_appendonly_indexes(onerel, options, dropped_segs, bstrategy);
-	AppendOptimizedResetDeadSegments(onerel, dropped_segs);
-	bms_free(dropped_segs);
+	vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
+	AppendOptimizedDropDeadSegments(onerel, dead_segs);
+	bms_free(dead_segs);
 
 	/* Update statistics in pg_class */
 	vacuum_appendonly_fill_stats(onerel, GetActiveSnapshot(),
@@ -444,7 +429,7 @@ ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy
  * It returns the number of indexes on the relation.
  */
 static int
-vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_segs,
+vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dead_segs,
 						  BufferAccessStrategy bstrategy)
 {
 	int			i;
@@ -474,7 +459,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_s
 			elevel = DEBUG2;
 
 		/* just scan indexes to update statistic */
-		if (Gp_role == GP_ROLE_DISPATCH || bms_is_empty(dropped_segs))
+		if (Gp_role == GP_ROLE_DISPATCH || bms_is_empty(dead_segs))
 		{
 			for (i = 0; i < nindexes; i++)
 			{
@@ -487,7 +472,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_s
 			{
 				vacuum_appendonly_index(Irel[i],
 										Irel[i]->rd_rel->reltuples,
-										dropped_segs,
+										dead_segs,
 										elevel,
 										bstrategy);
 			}
@@ -508,7 +493,7 @@ vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dropped_s
 static void
 vacuum_appendonly_index(Relation indexRelation,
 						double rel_tuple_count,
-						Bitmapset *dropped_seg,
+						Bitmapset *dead_segs,
 						int elevel,
 						BufferAccessStrategy bstrategy)
 {
@@ -527,7 +512,7 @@ vacuum_appendonly_index(Relation indexRelation,
 
 	/* Do bulk deletion */
 	stats = index_bulk_delete(&ivinfo, NULL, appendonly_tid_reaped,
-							  (void *) dropped_seg);
+							  (void *) dead_segs);
 
 	/* Do post-VACUUM cleanup */
 	stats = index_vacuum_cleanup(&ivinfo, stats);
@@ -569,7 +554,7 @@ vacuum_appendonly_index(Relation indexRelation,
  *
  * Is a particular tid for an appendonly reaped? the inputed state
  * is a bitmap of dropped segno. The index entry is reaped only
- * because of the segment no is a member of dropped_segs. In this
+ * because of the segment no is a member of dead_segs. In this
  * way, no need to scan visibility map so the performance would be
  * good.
  *
@@ -578,10 +563,10 @@ vacuum_appendonly_index(Relation indexRelation,
 static bool
 appendonly_tid_reaped(ItemPointer itemptr, void *state)
 {
-	Bitmapset *dropped_segs = (Bitmapset *) state;
+	Bitmapset *dead_segs = (Bitmapset *) state;
 	int segno = AOTupleIdGet_segmentFileNum((AOTupleId *)itemptr);
 
-	return bms_is_member(segno, dropped_segs);
+	return bms_is_member(segno, dead_segs);
 }
 
 /*
