@@ -5982,21 +5982,23 @@ ATAocsWriteNewColumns(AlteredTableInfo *tab)
 	/*
 	 * There might be AWAITING_DROP segments occupying spaces for failing
 	 * to drop at VACUUM in the case of cleaning up happened concurrently
-	 * with earlier readers which was accessing the dead segment file.
+	 * with earlier readers which was accessing the dead segment files.
 	 * 
 	 * We used to call AppendOptimizedRecycleDeadSegments() to recycle those
-	 * segfiles to save spaces in this scenario. But it didn't consider that
-	 * indexes should be also cleaned up accordingly.
+	 * segfiles to save spaces in this scenario. But it didn't do corresponding
+	 * index tuples cleanup for unknown reason.
 	 * 
-	 * After optimized VACUUM AO strategy, we did refactor
+	 * After optimizing VACUUM AO strategy, we did refactor
 	 * AppendOptimizedRecycleDeadSegments() a little and expected combining
 	 * dead segfiles cleanup with corresponding indexes cleanup together in
 	 * the function AppendOptimizedRecycleDeadSegments(). While it seems to
 	 * be impossible to pass index vacuuming parameter in this scenario, so
-	 * we removed AppendOptimizedRecycleDeadSegments() and dedicated it to be
-	 * called only in VACUUM scenario. 
-	 * Besides, we enabled AUTOVACUUM routine, it could do cleanup more
-	 * frequently, so we needn't worry about missing cleanup here.
+	 * we removed AppendOptimizedRecycleDeadSegments() out and dedicated it
+	 * to be called only in VACUUM scenario.
+	 * 
+	 * Besides, we enabled AUTOVACUUM routine, which could do VACUUM more
+	 * frequently, so we are supposed to be fine with missing recycling dead
+	 * segfiles here.
 	 */
 
 	segInfos = GetAllAOCSFileSegInfo(rel, snapshot, &nseg, NULL);
