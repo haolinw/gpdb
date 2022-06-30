@@ -524,10 +524,10 @@ AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos)
 
 /*
  * Recycle AWAITING_DROP segments and return the dead segment numbers.
- *
- * This tries to acquire an AccessExclusiveLock on the table, if it's
- * available. If it's not, no segments are dropped.
- *
+ * 
+ * Acquire ExclusiveLock with cutoff_xid is sufficent to drop dead
+ * segments concurrent safely, refer to the detail explaination inside
+ * the function.
  */
 void
 AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **collect_dead_segs)
@@ -601,24 +601,6 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **collect_dead_segs
 			continue;
 
 		/*
-		 * Upgrade our lock to AccessExclusiveLock for the drop. Upgrading a
-		 * lock poses a deadlock risk, so give up if we cannot acquire the
-		 * lock immediately. We'll retry dropping the segment on the next
-		 * VACUUM.
-		 */
-		if (!got_accessexclusive_lock)
-		{
-			if (!ConditionalLockRelation(aorel, AccessExclusiveLock))
-			{
-				if (Debug_appendonly_print_compaction)
-					elog(LOG, "could not acquire AccessExclusiveLock lock on %s to recycle segno %d",
-						 RelationGetRelationName(aorel), segno);
-				break;
-			}
-			got_accessexclusive_lock = true;
-		}
-
-		/*
 		 * It's in awaiting-drop state, but does everyone see it that way?
 		 *
 		 * Compare the tuple's xmin with the oldest-xmin horizon. We don't bother
@@ -626,6 +608,22 @@ AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **collect_dead_segs
 		 * should not be set. Even if the tuple was update, presumably an AO
 		 * segment that's in awaiting-drop state won't be resurrected, so even if
 		 * someone updates or locks the tuple, it's still safe to drop.
+		 * 
+		 * We don't need to acquire AccessExclusiveLock any longer since we only
+		 * allow concurrent readers at the moment by holding ExclusiveLock, explaining
+		 * this by the following two cases:
+		 * 
+		 * a) When there was a reader accessing a segment file which was changed to
+		 * AWAITING_DROP in later VACUUM compaction, the reader's xid should be earlier
+		 * than this tuple's xmin hence would set visible_to_all to false. Then the
+		 * AWAITING_DROP segment file wouldn't be dropped in this VACUUM cleanup and
+		 * the earlier reader could still be able to access old tuples.
+		 * 
+		 * b) Continue above, so there was a segment file in AWAITING_DROP state, the
+		 * subsequent transactions can't see that hence it wouldn't be touched until
+		 * next VACUUM is arrived. Therefore no later transaction's xid could be earlier
+		 * than this dead segment tuple's xmin hence it would be true on visible_to_all.
+		 * Then the corresponding dead segment file could be dropped at this time.
 		 */
 		xmin = HeapTupleHeaderGetXmin(tuple->t_data);
 		if (xmin == FrozenTransactionId)

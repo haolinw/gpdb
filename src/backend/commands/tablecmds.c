@@ -5979,8 +5979,25 @@ ATAocsWriteNewColumns(AlteredTableInfo *tab)
 	rel = heap_open(tab->relid, NoLock);
 	Assert(RelationIsAoCols(rel));
 
-	/* Try to recycle any old segfiles first. */
-	AppendOptimizedRecycleDeadSegments(rel, NULL);
+	/*
+	 * There might be AWAITING_DROP segments occupying spaces for failing
+	 * to drop at VACUUM in the case of cleaning up happened concurrently
+	 * with earlier readers which was accessing the dead segment file.
+	 * 
+	 * We used to call AppendOptimizedRecycleDeadSegments() to recycle those
+	 * segfiles to save spaces in this scenario. But it didn't consider that
+	 * indexes should be also cleaned up accordingly.
+	 * 
+	 * After optimized VACUUM AO strategy, we did refactor
+	 * AppendOptimizedRecycleDeadSegments() a little and expected combining
+	 * dead segfiles cleanup with corresponding indexes cleanup together in
+	 * the function AppendOptimizedRecycleDeadSegments(). While it seems to
+	 * be impossible to pass index vacuuming parameter in this scenario, so
+	 * we removed AppendOptimizedRecycleDeadSegments() and dedicated it to be
+	 * called only in VACUUM scenario. 
+	 * Besides, we enabled AUTOVACUUM routine, it could do cleanup more
+	 * frequently, so we needn't worry about missing cleanup here.
+	 */
 
 	segInfos = GetAllAOCSFileSegInfo(rel, snapshot, &nseg, NULL);
 	basepath = relpathbackend(rel->rd_node, rel->rd_backend, MAIN_FORKNUM);
