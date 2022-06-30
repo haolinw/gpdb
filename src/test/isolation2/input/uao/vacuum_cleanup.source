@@ -59,3 +59,66 @@
 1: SELECT * FROM gp_ao_or_aocs_seg('ao_@amname@_vacuum_cleanup3');
 
 2: commit;
+
+1q:
+2q:
+
+-- Test VACUUM with concurrent readers:
+-- a) if reader transaction started before VACUUM, VACUUM should not drop the AWAITING_DROP segment
+--    which was accessing by the reader;
+-- b) if reader transaction started after VACUUM, VACUUM should drop the AWAITING_DROP segments.
+
+create or replace function show_aoseg(tabname text) returns table
+    (segno int, tupcount bigint, modcount bigint, formatversion smallint, state smallint) as $$
+declare
+    tabrelid oid; /* in func */
+    tabsegrelid oid; /* in func */
+    tabsegrelname text; /* in func */
+begin
+    select tabname::regclass::oid into tabrelid; /* in func */
+    select segrelid from pg_appendonly where relid = tabrelid into tabsegrelid; /* in func */
+    select relname from pg_class where oid = tabsegrelid into tabsegrelname; /* in func */
+
+    return query execute 'select segno,tupcount,modcount,formatversion,state from pg_aoseg.' || tabsegrelname; /* in func */
+end; /* in func */
+$$ language plpgsql;
+
+create table vacuum_concurrent_reader_@amname@ (a int, b int, c int) using @amname@;
+insert into vacuum_concurrent_reader_@amname@ select 2, b, b from generate_series(1, 11) b;
+create index i_b_vacuum_concurrent_reader_@amname@ on vacuum_concurrent_reader_@amname@(b);
+update vacuum_concurrent_reader_@amname@ set b = b + 1;
+
+-- expect segment state is DEFAULT (state == 1)
+0U: select * from show_aoseg('vacuum_concurrent_reader_@amname@') order by segno;
+
+-- start a reader before VACUUM
+1: begin;
+1: select * from vacuum_concurrent_reader_@amname@ where b = 10;
+
+vacuum vacuum_concurrent_reader_@amname@;
+
+-- expect to see AWAITING_DROP(state == 2) tuple
+0U: select * from show_aoseg('vacuum_concurrent_reader_@amname@') order by segno;
+
+1: select * from vacuum_concurrent_reader_@amname@ where b = 5;
+1: select * from vacuum_concurrent_reader_@amname@ order by c;
+1: end;
+
+-- start another reader after VACUUM
+2: begin;
+2: select * from vacuum_concurrent_reader_@amname@ where c = 2;
+
+-- expect to see AWAITING_DROP(state == 2) tuple for unable to drop the dead segment by the first VACUUM
+0U: select * from show_aoseg('vacuum_concurrent_reader_@amname@') order by segno;
+
+vacuum vacuum_concurrent_reader_@amname@;
+
+-- expect no AWAITING_DROP(state == 2) tuple because it was dropped by the last VACUUM
+0U: select * from show_aoseg('vacuum_concurrent_reader_@amname@') order by segno;
+
+2: select * from vacuum_concurrent_reader_@amname@ where b = 7;
+2: select * from vacuum_concurrent_reader_@amname@ order by c;
+2: end;
+
+drop table vacuum_concurrent_reader_@amname@;
+drop function show_aoseg;

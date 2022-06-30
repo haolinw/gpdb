@@ -114,6 +114,7 @@
  */
 #include "postgres.h"
 
+#include "access/table.h"
 #include "access/aocs_compaction.h"
 #include "access/appendonlywriter.h"
 #include "access/appendonly_compaction.h"
@@ -155,13 +156,14 @@ static void vacuum_appendonly_fill_stats(Relation aorel, Snapshot snapshot, int 
 										 bool *relhasindex);
 static int vacuum_appendonly_indexes(Relation aoRelation, int options, Bitmapset *dead_segs,
 									 BufferAccessStrategy bstrategy);
+static void ao_vacuum_rel_recycle_dead_segments(Relation onerel, VacuumParams *params,
+												BufferAccessStrategy bstrategy);
 
 static void
 ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
 {
 	char	   *relname;
 	int			elevel;
-	Bitmapset	*dead_segs;
 	int			options = params->options;
 
 	if (options & VACOPT_VERBOSE)
@@ -190,42 +192,7 @@ ao_vacuum_rel_pre_cleanup(Relation onerel, VacuumParams *params, BufferAccessStr
 	 *
 	 * This could run in a local transaction.
 	 */
-	AppendOptimizedRecycleDeadSegments(onerel, &dead_segs);
-
-	/*
-	 * Vacuum indexes only when we do find AWAITING_DROP segments,
-	 * no need to update stats in pre_cleanup phase.
-	 */
-	if (dead_segs != NULL)
-	{
-		/*
-		 * Do index vacuuming before dropping dead segments for data
-		 * consistency and crash safety. If dropping dead segments before
-		 * cleaning up index tuples, the following issues may occur:
-		 * 
-		 * a) The dead segment file becomes available as soon as dropping
-		 * complete. Concurrent inserts may fill it with new tuples hence
-		 * might be deleted soon in the following index vacuuming;
-		 * 
-		 * b) Crash happens in-between AppendOptimizedRecycleDeadSegments()
-		 * and vacuum_appendonly_indexes() result in losing the opportunity
-		 * to clean index entries fully as a state for which index tuples
-		 * to delete will be lost in this case.
-		 * 
-		 * So make sure to vacuum indexs to be based on persistent information
-		 * (AWAITING_DROP state in pg_aoseg) to cleanup dead index tuples
-		 * effectively.
-		 */
-		vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
-		/*
-		 * Truncate AWAITING_DROP the above collected segments to 0 byte.
-		 * Assuming no transaction is able to access the dead segments as it
-		 * has been already marked as AWAITING_DROP, no lock will be held in
-		 * clearing segment info.
-		 */
-		AppendOptimizedDropDeadSegments(onerel, dead_segs);
-		bms_free(dead_segs);
-	}
+	ao_vacuum_rel_recycle_dead_segments(onerel, params, bstrategy);
 
 	/*
 	 * Also truncate all live segments to the EOF values stored in pg_aoseg.
@@ -248,7 +215,6 @@ ao_vacuum_rel_post_cleanup(Relation onerel, VacuumParams *params, BufferAccessSt
 	MultiXactId MultiXactCutoff;
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
-	Bitmapset	*dead_segs;
 
 	if (options & VACOPT_VERBOSE)
 		elevel = INFO;
@@ -267,14 +233,12 @@ ao_vacuum_rel_post_cleanup(Relation onerel, VacuumParams *params, BufferAccessSt
 	 * 2. Vacuum indexes.
 	 * 
 	 * 3. Drop/Truncate dead segments.
+	 * 
+	 * 4. Update statistics.
 	 */
 	Assert(RelationIsAoRows(onerel) || RelationIsAoCols(onerel));
 
-	AppendOptimizedRecycleDeadSegments(onerel, &dead_segs);
-	/* Vacuum indexes and update stats in post_cleanup phases. */
-	vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
-	AppendOptimizedDropDeadSegments(onerel, dead_segs);
-	bms_free(dead_segs);
+	ao_vacuum_rel_recycle_dead_segments(onerel, params, bstrategy);
 
 	/* Update statistics in pg_class */
 	vacuum_appendonly_fill_stats(onerel, GetActiveSnapshot(),
@@ -419,6 +383,170 @@ ao_vacuum_rel(Relation rel, VacuumParams *params, BufferAccessStrategy bstrategy
 	else
 		/* Do nothing here, we will launch the stages later */
 		Assert(ao_vacuum_phase == 0);
+}
+
+/*
+ * Recycling AWAITING_DROP segments.
+ * 
+ * Acquire AccessShareLock with cutoff_xid to scan and collect dead
+ * segments; Acquire ExclusiveLock to truncate the file to 0 bytes.
+ * Refer to the comments inside the function for detail explaination.
+ */
+static void
+ao_vacuum_rel_recycle_dead_segments(Relation onerel, VacuumParams *params, BufferAccessStrategy bstrategy)
+{
+	Relation	pg_aoseg_rel;
+	TupleDesc	pg_aoseg_dsc;
+	SysScanDesc aoscan;
+	HeapTuple	tuple;
+	Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
+	TransactionId cutoff_xid = InvalidTransactionId;
+	Oid			segrelid;
+	Bitmapset	*dead_segs = NULL;
+	int			options;
+	int			ao_vacuum_phase;
+
+	Assert(RelationIsAppendOptimized(onerel));
+
+	GetAppendOnlyEntryAuxOids(onerel->rd_id, appendOnlyMetaDataSnapshot,
+							  &segrelid, NULL, NULL, NULL, NULL);
+	/*
+	 * Now pick a segment that is not in use, and is not over the allowed
+	 * size threshold (90% full).
+	 */
+	pg_aoseg_rel = heap_open(segrelid, AccessShareLock);
+	pg_aoseg_dsc = RelationGetDescr(pg_aoseg_rel);
+
+	aoscan = systable_beginscan(pg_aoseg_rel, InvalidOid, false, appendOnlyMetaDataSnapshot, 0, NULL);
+	while ((tuple = systable_getnext(aoscan)) != NULL)
+	{
+		bool		visible_to_all;
+		int			segno;
+		int16		state;
+		bool		isNull;
+		TransactionId xmin;
+
+		if (RelationIsAoRows(onerel))
+		{
+			segno = DatumGetInt32(fastgetattr(tuple,
+											  Anum_pg_aoseg_segno,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+
+			state = DatumGetInt16(fastgetattr(tuple,
+											  Anum_pg_aoseg_state,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+		}
+		else
+		{
+			segno = DatumGetInt32(fastgetattr(tuple,
+											  Anum_pg_aocs_segno,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+
+			state = DatumGetInt16(fastgetattr(tuple,
+											  Anum_pg_aocs_state,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+		}
+
+		if (state != AOSEG_STATE_AWAITING_DROP)
+			continue;
+
+		/*
+		 * It's in awaiting-drop state, but does everyone see it that way?
+		 *
+		 * Compare the tuple's xmin with the oldest-xmin horizon. We don't bother
+		 * checking the xmax; we never update or lock awaiting-drop tuples, so it
+		 * should not be set. Even if the tuple was update, presumably an AO
+		 * segment that's in awaiting-drop state won't be resurrected, so even if
+		 * someone updates or locks the tuple, it's still safe to drop.
+		 * 
+		 * We don't need to acquire AccessExclusiveLock any longer because we only
+		 * scan pg_aoseg to collect dead segments but no truncaste happens here.
+		 * Considering the following two cases:
+		 * 
+		 * a) When there was a reader accessing a segment file which was changed to
+		 * AWAITING_DROP in later VACUUM compaction, the reader's xid should be earlier
+		 * than this tuple's xmin hence would set visible_to_all to false. Then the
+		 * AWAITING_DROP segment file wouldn't be dropped in this VACUUM cleanup and
+		 * the earlier reader could still be able to access old tuples.
+		 * 
+		 * b) Continue above, so there was a segment file in AWAITING_DROP state, the
+		 * subsequent transactions can't see that hence it wouldn't be touched until
+		 * next VACUUM is arrived. Therefore no later transaction's xid could be earlier
+		 * than this dead segment tuple's xmin hence it would be true on visible_to_all.
+		 * Then the corresponding dead segment file could be dropped later at that time.
+		 */
+		xmin = HeapTupleHeaderGetXmin(tuple->t_data);
+		if (xmin == FrozenTransactionId)
+			visible_to_all = true;
+		else
+		{
+			if (cutoff_xid == InvalidTransactionId)
+				cutoff_xid = GetOldestXmin(NULL, true);
+
+			visible_to_all = TransactionIdPrecedes(xmin, cutoff_xid);
+		}
+		if (!visible_to_all)
+			continue;
+
+		/* collect dead segnos for dropping */
+		dead_segs = bms_add_member(dead_segs, segno);
+	}
+	systable_endscan(aoscan);
+
+	heap_close(pg_aoseg_rel, AccessShareLock);
+
+	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
+
+	/*
+	 * Do index vacuuming before dropping dead segments for data
+	 * consistency and crash safety. If dropping dead segments before
+	 * cleaning up index tuples, the following issues may occur:
+	 * 
+	 * a) The dead segment file becomes available as soon as dropping
+	 * complete. Concurrent inserts may fill it with new tuples hence
+	 * might be deleted soon in the following index vacuuming;
+	 * 
+	 * b) Crash happens in-between ao_vacuum_rel_recycle_dead_segments()
+	 * and vacuum_appendonly_indexes() result in losing the opportunity
+	 * to clean index entries fully as a state for which index tuples
+	 * to delete will be lost in this case.
+	 * 
+	 * So make sure to vacuum indexs to be based on persistent information
+	 * (AWAITING_DROP state in pg_aoseg) to cleanup dead index tuples
+	 * effectively.
+	 */
+	options = params->options;
+	if (!bms_is_empty(dead_segs))
+	{
+		/*
+		 * Vacuum indexes only when we do find AWAITING_DROP segments.
+		 */
+		vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
+		/*
+		 * Truncate AWAITING_DROP the above collected segments to 0 byte.
+		 * Assuming no transaction is able to access the dead segments as it
+		 * has been already marked as AWAITING_DROP, ExclusiveLock will be
+		 * held in case of concurrent VACUUM being on the same file.
+		 */
+		AppendOptimizedDropDeadSegments(onerel, dead_segs);
+	}
+	else
+	{
+		/*
+		 * If no AWAITING_DROP segments were found, we called
+		 * vacuum_appendonly_indexes() in post_cleanup phase
+		 * for updating statistics.
+		 */
+		ao_vacuum_phase = (options & VACUUM_AO_PHASE_MASK);
+		if (ao_vacuum_phase == VACOPT_AO_POST_CLEANUP_PHASE)
+			vacuum_appendonly_indexes(onerel, options, dead_segs, bstrategy);
+	}
+
+	bms_free(dead_segs);
 }
 
 /*

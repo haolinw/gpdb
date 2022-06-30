@@ -517,142 +517,16 @@ AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos)
 {
 	int segno;
 
-	segno = -1;
-	while ((segno = bms_next_member(segnos, segno)) >= 0)
-		AppendOptimizedDropDeadSegment(aorel, segno);
-}
-
-/*
- * Recycle AWAITING_DROP segments and return the dead segment numbers.
- *
- * This tries to acquire an AccessExclusiveLock on the table, if it's
- * available. If it's not, no segments are dropped.
- *
- */
-void
-AppendOptimizedRecycleDeadSegments(Relation aorel, Bitmapset **collect_dead_segs)
-{
-	Relation	pg_aoseg_rel;
-	TupleDesc	pg_aoseg_dsc;
-	SysScanDesc aoscan;
-	HeapTuple	tuple;
-	Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
-	bool		got_accessexclusive_lock = false;
-	TransactionId cutoff_xid = InvalidTransactionId;
-	Oid			segrelid;
-
-	Assert(RelationIsAppendOptimized(aorel));
-
-	if (collect_dead_segs != NULL)
-		*collect_dead_segs = NULL;
-
 	/*
-	 * The algorithm below for choosing a target segment is not concurrent-safe.
-	 * Grab a lock to serialize.
-	 *
-	 * INterlocks with SetSegnoInternal()
+	 * drop segments in batch with concurrent-safety
 	 */
 	LockRelationForExtension(aorel, ExclusiveLock);
 
-	GetAppendOnlyEntryAuxOids(aorel->rd_id, appendOnlyMetaDataSnapshot,
-							  &segrelid, NULL, NULL, NULL, NULL);
-	/*
-	 * Now pick a segment that is not in use, and is not over the allowed
-	 * size threshold (90% full).
-	 */
-	pg_aoseg_rel = heap_open(segrelid, AccessShareLock);
-	pg_aoseg_dsc = RelationGetDescr(pg_aoseg_rel);
-
-	aoscan = systable_beginscan(pg_aoseg_rel, InvalidOid, false, appendOnlyMetaDataSnapshot, 0, NULL);
-	while ((tuple = systable_getnext(aoscan)) != NULL)
-	{
-		bool		visible_to_all;
-		int			segno;
-		int16		state;
-		bool		isNull;
-		TransactionId xmin;
-
-		if (RelationIsAoRows(aorel))
-		{
-			segno = DatumGetInt32(fastgetattr(tuple,
-											  Anum_pg_aoseg_segno,
-											  pg_aoseg_dsc, &isNull));
-			Assert(!isNull);
-
-			state = DatumGetInt16(fastgetattr(tuple,
-											  Anum_pg_aoseg_state,
-											  pg_aoseg_dsc, &isNull));
-			Assert(!isNull);
-		}
-		else
-		{
-			segno = DatumGetInt32(fastgetattr(tuple,
-											  Anum_pg_aocs_segno,
-											  pg_aoseg_dsc, &isNull));
-			Assert(!isNull);
-
-			state = DatumGetInt16(fastgetattr(tuple,
-											  Anum_pg_aocs_state,
-											  pg_aoseg_dsc, &isNull));
-			Assert(!isNull);
-		}
-
-		if (state != AOSEG_STATE_AWAITING_DROP)
-			continue;
-
-		/*
-		 * Upgrade our lock to AccessExclusiveLock for the drop. Upgrading a
-		 * lock poses a deadlock risk, so give up if we cannot acquire the
-		 * lock immediately. We'll retry dropping the segment on the next
-		 * VACUUM.
-		 */
-		if (!got_accessexclusive_lock)
-		{
-			if (!ConditionalLockRelation(aorel, AccessExclusiveLock))
-			{
-				if (Debug_appendonly_print_compaction)
-					elog(LOG, "could not acquire AccessExclusiveLock lock on %s to recycle segno %d",
-						 RelationGetRelationName(aorel), segno);
-				break;
-			}
-			got_accessexclusive_lock = true;
-		}
-
-		/*
-		 * It's in awaiting-drop state, but does everyone see it that way?
-		 *
-		 * Compare the tuple's xmin with the oldest-xmin horizon. We don't bother
-		 * checking the xmax; we never update or lock awaiting-drop tuples, so it
-		 * should not be set. Even if the tuple was update, presumably an AO
-		 * segment that's in awaiting-drop state won't be resurrected, so even if
-		 * someone updates or locks the tuple, it's still safe to drop.
-		 */
-		xmin = HeapTupleHeaderGetXmin(tuple->t_data);
-		if (xmin == FrozenTransactionId)
-			visible_to_all = true;
-		else
-		{
-			if (cutoff_xid == InvalidTransactionId)
-				cutoff_xid = GetOldestXmin(NULL, true);
-
-			visible_to_all = TransactionIdPrecedes(xmin, cutoff_xid);
-		}
-		if (!visible_to_all)
-			continue;
-
-		/* all set! */
-		if (collect_dead_segs == NULL)
-			AppendOptimizedDropDeadSegment(aorel, segno);
-		else
-			*collect_dead_segs = bms_add_member(*collect_dead_segs, segno);
-	}
-	systable_endscan(aoscan);
-
+	segno = -1;
+	while ((segno = bms_next_member(segnos, segno)) >= 0)
+		AppendOptimizedDropDeadSegment(aorel, segno);
+	
 	UnlockRelationForExtension(aorel, ExclusiveLock);
-
-	heap_close(pg_aoseg_rel, AccessShareLock);
-
-	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
 }
 
 /*

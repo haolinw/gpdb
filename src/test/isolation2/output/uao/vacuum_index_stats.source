@@ -11,10 +11,7 @@
 -- the scope of gp_appendonly_compaction_threshold percentage of total tuples.
 -- The new strategy would not impact table->reltuples updates.
 
-set default_table_access_method=@amname@;
-SET
-
-create table vacuum_index_stats_@amname@ (a int, b int, c int);
+create table vacuum_index_stats_@amname@ (a int, b int, c int) using @amname@;
 CREATE
 insert into vacuum_index_stats_@amname@ select 2, b, b from generate_series(1, 11) b;
 INSERT 11
@@ -106,7 +103,5 @@ VACUUM
 
 drop table vacuum_index_stats_@amname@;
 DROP
-reset default_table_access_method;
-RESET
 reset gp_appendonly_compaction_threshold;
 RESET
