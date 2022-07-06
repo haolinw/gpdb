@@ -485,7 +485,7 @@ ao_vacuum_rel_recycle_dead_segments(Relation onerel, VacuumParams *params, Buffe
 		else
 		{
 			if (cutoff_xid == InvalidTransactionId)
-				cutoff_xid = GetOldestXmin(NULL, true);
+				cutoff_xid = GetOldestXmin(NULL, PROCARRAY_FLAGS_VACUUM);
 
 			visible_to_all = TransactionIdPrecedes(xmin, cutoff_xid);
 		}
