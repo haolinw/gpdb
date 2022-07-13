@@ -26,6 +26,7 @@
 #include "access/aomd.h"
 #include "access/aosegfiles.h"
 #include "access/appendonly_compaction.h"
+#include "access/aocs_compaction.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/transam.h"
@@ -504,74 +505,155 @@ HasLockForSegmentFileDrop(Relation aorel)
 }
 
 /*
- * Performs a compaction of an append-only relation.
- *
- * In non-utility mode, all compaction segment files should be
- * marked as in-use/in-compaction in the appendonlywriter.c code.
- *
+ * Collect AWAITING_DROP segments.
+ * 
+ * Acquire AccessShareLock with cutoff_xid to scan and collect dead
+ * segments.
  */
-void
-AppendOnlyDrop(Relation aorel, List *compaction_segno)
+Bitmapset *
+AppendOptimizedCollectDeadSegments(Relation aorel)
 {
-	const char *relname;
-	int			total_segfiles;
-	FileSegInfo **segfile_array;
-	int			i,
-				segno;
-	FileSegInfo *fsinfo;
-	Snapshot	appendOnlyMetaDataSnapshot = SnapshotSelf;
+	Relation	pg_aoseg_rel;
+	TupleDesc	pg_aoseg_dsc;
+	SysScanDesc aoscan;
+	HeapTuple	tuple;
+	Snapshot	appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
+	TransactionId cutoff_xid = InvalidTransactionId;
+	Oid			segrelid;
+	Bitmapset	*dead_segs = NULL;
 
-	Assert(Gp_role == GP_ROLE_EXECUTE || Gp_role == GP_ROLE_UTILITY);
-	Assert(RelationIsAoRows(aorel));
+	Assert(RelationIsAppendOptimized(aorel));
 
-	relname = RelationGetRelationName(aorel);
+	GetAppendOnlyEntryAuxOids(aorel->rd_id, appendOnlyMetaDataSnapshot,
+							  &segrelid, NULL, NULL, NULL, NULL);
+	
+	pg_aoseg_rel = heap_open(segrelid, AccessShareLock);
+	pg_aoseg_dsc = RelationGetDescr(pg_aoseg_rel);
 
-	elogif(Debug_appendonly_print_compaction, LOG,
-		   "Drop AO relation %s", relname);
-
-	/* Get information about all the file segments we need to scan */
-	segfile_array = GetAllFileSegInfo(aorel, appendOnlyMetaDataSnapshot, &total_segfiles);
-
-	for (i = 0; i < total_segfiles; i++)
+	aoscan = systable_beginscan(pg_aoseg_rel, InvalidOid, false, appendOnlyMetaDataSnapshot, 0, NULL);
+	while ((tuple = systable_getnext(aoscan)) != NULL)
 	{
-		segno = segfile_array[i]->segno;
-		if (!list_member_int(compaction_segno, segno))
+		bool		visible_to_all;
+		int			segno;
+		int16		state;
+		bool		isNull;
+		TransactionId xmin;
+
+		if (RelationIsAoRows(aorel))
 		{
-			continue;
+			segno = DatumGetInt32(fastgetattr(tuple,
+											  Anum_pg_aoseg_segno,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+
+			state = DatumGetInt16(fastgetattr(tuple,
+											  Anum_pg_aoseg_state,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
 		}
+		else
+		{
+			segno = DatumGetInt32(fastgetattr(tuple,
+											  Anum_pg_aocs_segno,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+
+			state = DatumGetInt16(fastgetattr(tuple,
+											  Anum_pg_aocs_state,
+											  pg_aoseg_dsc, &isNull));
+			Assert(!isNull);
+		}
+
+		if (state != AOSEG_STATE_AWAITING_DROP)
+			continue;
 
 		/*
-		 * Try to get the transaction write-lock for the Append-Only segment
-		 * file.
+		 * It's in awaiting-drop state, but does everyone see it that way?
 		 *
-		 * NOTE: This is a transaction scope lock that must be held until
-		 * commit / abort.
+		 * Compare the tuple's xmin with the oldest-xmin horizon. We don't bother
+		 * checking the xmax; we never update or lock awaiting-drop tuples, so it
+		 * should not be set. Even if the tuple was update, presumably an AO
+		 * segment that's in awaiting-drop state won't be resurrected, so even if
+		 * someone updates or locks the tuple, it's still safe to drop.
+		 * 
+		 * We don't need to acquire AccessExclusiveLock any longer because we only
+		 * scan pg_aoseg to collect dead segments but no truncaste happens here.
+		 * Considering the following two cases:
+		 * 
+		 * a) When there was a reader accessing a segment file which was changed to
+		 * AWAITING_DROP in later VACUUM compaction, the reader's xid should be earlier
+		 * than this tuple's xmin hence would set visible_to_all to false. Then the
+		 * AWAITING_DROP segment file wouldn't be dropped in this VACUUM cleanup and
+		 * the earlier reader could still be able to access old tuples.
+		 * 
+		 * b) Continue above, so there was a segment file in AWAITING_DROP state, the
+		 * subsequent transactions can't see that hence it wouldn't be touched until
+		 * next VACUUM is arrived. Therefore no later transaction's xid could be earlier
+		 * than this dead segment tuple's xmin hence it would be true on visible_to_all.
+		 * Then the corresponding dead segment file could be dropped later at that time.
 		 */
-		LockRelationAppendOnlySegmentFile(
-										  &aorel->rd_node,
-										  segfile_array[i]->segno,
-										  AccessExclusiveLock,
-										  false);
-
-		/* Re-fetch under the write lock to get latest committed eof. */
-		fsinfo = GetFileSegInfo(aorel, appendOnlyMetaDataSnapshot, segno);
-
-		if (fsinfo->state == AOSEG_STATE_AWAITING_DROP)
+		xmin = HeapTupleHeaderGetXmin(tuple->t_data);
+		if (xmin == FrozenTransactionId)
+			visible_to_all = true;
+		else
 		{
-			Assert(HasLockForSegmentFileDrop(aorel));
-			Assert(!HasSerializableBackends(false));
-			AppendOnlyCompaction_DropSegmentFile(aorel, segno);
-			ClearFileSegInfo(aorel, segno,
-							 AOSEG_STATE_DEFAULT);
-		}
-		pfree(fsinfo);
-	}
+			if (cutoff_xid == InvalidTransactionId)
+				cutoff_xid = GetOldestXmin(NULL, true);
 
-	if (segfile_array)
-	{
-		FreeAllSegFileInfo(segfile_array, total_segfiles);
-		pfree(segfile_array);
+			visible_to_all = TransactionIdPrecedes(xmin, cutoff_xid);
+		}
+		if (!visible_to_all)
+			continue;
+
+		/* collect dead segnos for dropping */
+		dead_segs = bms_add_member(dead_segs, segno);
 	}
+	systable_endscan(aoscan);
+
+	heap_close(pg_aoseg_rel, AccessShareLock);
+
+	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
+
+	return dead_segs;
+}
+
+/*
+ * Reset AWAITING_DROP segments.
+ * 
+ * Callers should guarantee that the segfile is no longer needed by any
+ * running transaction. It is not necessary to hold a lock on the segfile
+ * row, though.
+ */
+static inline void
+AppendOptimizedDropDeadSegment(Relation aorel, int segno)
+{
+	if (RelationIsAoRows(aorel))
+	{
+		AppendOnlyCompaction_DropSegmentFile(aorel, segno);
+		ClearFileSegInfo(aorel, segno, AOSEG_STATE_DEFAULT);
+	}
+	else
+	{
+		AOCSCompaction_DropSegmentFile(aorel, segno);
+		ClearAOCSFileSegInfo(aorel, segno, AOSEG_STATE_DEFAULT);
+	}
+}
+
+void
+AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos)
+{
+	int segno;
+
+	/*
+	 * drop segments in batch with concurrent-safety
+	 */
+	LockRelationForExtension(aorel, ExclusiveLock);
+
+	segno = -1;
+	while ((segno = bms_next_member(segnos, segno)) >= 0)
+		AppendOptimizedDropDeadSegment(aorel, segno);
+	
+	UnlockRelationForExtension(aorel, ExclusiveLock);
 }
 
 /*

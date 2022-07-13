@@ -581,7 +581,6 @@ SetAOCSFileSegInfoState(Relation prel,
 void
 ClearAOCSFileSegInfo(Relation prel, int segno, FileSegInfoState newState)
 {
-	LockAcquireResult acquireResult;
 	Relation	segrel;
 	HeapScanDesc scan;
 	HeapTuple	oldtup = NULL;
@@ -603,20 +602,6 @@ ClearAOCSFileSegInfo(Relation prel, int segno, FileSegInfoState newState)
 		   "Clear seg file info: segno %d table '%s'",
 		   segno,
 		   RelationGetRelationName(prel));
-
-	/*
-	 * Verify we already have the write-lock!
-	 */
-	acquireResult = LockRelationAppendOnlySegmentFile(
-													  &prel->rd_node,
-													  segno,
-													  AccessExclusiveLock,
-													   /* dontWait */ false);
-	if (acquireResult != LOCKACQUIRE_ALREADY_HELD)
-	{
-		elog(ERROR, "Should already have the (transaction-scope) write-lock on Append-Only segment file #%d, "
-			 "relation %s", segno, RelationGetRelationName(prel));
-	}
 
 	segrel = heap_open(prel->rd_appendonly->segrelid, RowExclusiveLock);
 	tupdesc = RelationGetDescr(segrel);

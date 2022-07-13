@@ -6126,7 +6126,6 @@ column_to_scan(AOCSFileSegInfo **segInfos, int nseg, int natts, Relation aocsrel
 	int i;
 	AOCSVPInfoEntry *vpe;
 	int64 min_eof = 0;
-	List *drop_segno_list = NIL;
 
 	for (segi = 0; segi < nseg; ++segi)
 	{
@@ -6140,10 +6139,7 @@ column_to_scan(AOCSFileSegInfo **segInfos, int nseg, int natts, Relation aocsrel
 		 * its pg_class entry (e.g. in calls to getAOCSVPEntry).
 		 */
 		if (segInfos[segi]->state == AOSEG_STATE_AWAITING_DROP)
-		{
-			drop_segno_list = lappend_int(drop_segno_list, segInfos[segi]->segno);
 			continue;
-		}
 
 		/*
 		 * Skip over appendonly segments with no tuples (caused by VACUUM)
@@ -6161,9 +6157,6 @@ column_to_scan(AOCSFileSegInfo **segInfos, int nseg, int natts, Relation aocsrel
 			}
 		}
 	}
-
-	if (list_length(drop_segno_list) > 0 && Gp_role != GP_ROLE_DISPATCH)
-		AOCSDrop(aocsrel, drop_segno_list);
 
 	return scancol;
 }

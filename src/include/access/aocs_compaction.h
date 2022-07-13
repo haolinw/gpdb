@@ -23,4 +23,5 @@ extern void AOCSCompact(Relation aorel,
 			int insert_segno,
 			bool isFull);
 extern void AOCSTruncateToEOF(Relation aorel);
+extern void AOCSCompaction_DropSegmentFile(Relation aorel, int segno);
 #endif

@@ -21,6 +21,8 @@
 
 #define APPENDONLY_COMPACTION_SEGNO_INVALID (-1)
 
+extern Bitmapset *AppendOptimizedCollectDeadSegments(Relation aorel);
+extern void AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos);
 extern void AppendOnlyDrop(Relation aorel,
 			   List *compaction_segno);
 extern void AppendOnlyCompact(Relation aorel,
@@ -38,4 +40,5 @@ extern void AppendOnlyThrowAwayTuple(Relation rel,
 extern void AppendOnlyTruncateToEOF(Relation aorel);
 extern bool HasLockForSegmentFileDrop(Relation aorel);
 extern bool AppendOnlyCompaction_IsRelationEmpty(Relation aorel);
+
 #endif

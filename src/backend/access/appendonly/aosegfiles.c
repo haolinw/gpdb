@@ -541,8 +541,6 @@ ClearFileSegInfo(Relation parentrel,
 				 int segno,
 				 FileSegInfoState newState)
 {
-	LockAcquireResult acquireResult;
-
 	Relation	pg_aoseg_rel;
 	TupleDesc	pg_aoseg_dsc;
 	HeapScanDesc aoscan;
@@ -561,20 +559,6 @@ ClearFileSegInfo(Relation parentrel,
 		   "Clear seg file info: segno %d table '%s'",
 		   segno,
 		   RelationGetRelationName(parentrel));
-
-	/*
-	 * Verify we already have the write-lock!
-	 */
-	acquireResult = LockRelationAppendOnlySegmentFile(
-													  &parentrel->rd_node,
-													  segno,
-													  AccessExclusiveLock,
-													   /* dontWait */ false);
-	if (acquireResult != LOCKACQUIRE_ALREADY_HELD)
-	{
-		elog(ERROR, "Should already have the (transaction-scope) write-lock on Append-Only segment file #%d, "
-			 "relation %s", segno, RelationGetRelationName(parentrel));
-	}
 
 	/*
 	 * Open the aoseg relation and scan for tuple.
