@@ -21,10 +21,7 @@
 
 #define APPENDONLY_COMPACTION_SEGNO_INVALID (-1)
 
-extern Bitmapset *AppendOptimizedCollectDeadSegments(Relation aorel);
 extern void AppendOptimizedDropDeadSegments(Relation aorel, Bitmapset *segnos);
-extern void AppendOnlyDrop(Relation aorel,
-			   List *compaction_segno);
 extern void AppendOnlyCompact(Relation aorel,
 				  List *compaction_segno_list,
 				  int insert_segno,

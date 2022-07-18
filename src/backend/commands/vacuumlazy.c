@@ -602,9 +602,6 @@ ao_vacuum_rel_cleanup(Relation onerel, VacuumStmt *vacstmt, LVRelStats *vacrelst
 	elogif(Debug_appendonly_print_compaction, LOG,
 		   "Vacuum cleanup phase %s", RelationGetRelationName(onerel));
 
-	// /* no deletion, only update stats as necessary */
-	// vacuum_appendonly_indexes(onerel, vacstmt, NULL);
-
 	vacuum_appendonly_fill_stats(onerel, GetActiveSnapshot(),
 								 &vacrelstats->rel_pages,
 								 &vacrelstats->new_rel_tuples,
@@ -623,10 +620,14 @@ ao_vacuum_rel_cleanup(Relation onerel, VacuumStmt *vacstmt, LVRelStats *vacrelst
 static void
 ao_vacuum_rel_recycle_dead_segments(Relation onerel, VacuumStmt *vacstmt)
 {
-	Bitmapset	*dead_segs;
+	Bitmapset	*dead_segs = NULL;
 	bool		need_drop;
 
-	dead_segs = AppendOptimizedCollectDeadSegments(onerel);		
+	if (RelationIsAoRows(onerel))
+		AppendOnlyDrop(onerel, vacstmt->appendonly_compaction_segno, &dead_segs);
+	else
+		AOCSDrop(aorel, vacstmt->appendonly_compaction_segno, &dead_segs);
+
 	need_drop = !bms_is_empty(dead_segs);
 	if (need_drop)
 	{
