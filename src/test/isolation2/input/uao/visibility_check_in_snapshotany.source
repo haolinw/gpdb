@@ -19,5 +19,34 @@ insert into @amname@_snapshotany_tbl select a,a from generate_series(1,10) a;
 1: end;
 2: end;
 
+-- Case 2, verify index creation is able to update table's pg_class->reltuples correctly
+-- when pre-existing readonly transaction is not finished.
+
+1: set enable_seqscan = off;
+1: begin;
+-- start_ignore
+1: explain select * from @amname@_snapshotany_tbl where a = 2;
+-- end_ignore
+1: select * from @amname@_snapshotany_tbl where a = 2;
+
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl'; -- expect reltuples = 5;
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl_a_idx'; -- expect reltuples = 5;
+
+2: delete from @amname@_snapshotany_tbl where a = 2;
+
+0U: analyze @amname@_snapshotany_tbl;
+
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl'; -- expect reltuples = 4;
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl_a_idx'; -- expect reltuples = 4;
+
+2: create index on @amname@_snapshotany_tbl(a);
+
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl'; -- expect reltuples = 4;
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl_a_idx'; -- expect reltuples = 4;
+0U: select reltuples from pg_class where relname='@amname@_snapshotany_tbl_a_idx1'; -- expect reltuples = 5;
+0Uq:
+
+1: end;
+
 drop table @amname@_snapshotany_tbl;
 reset default_table_access_method;

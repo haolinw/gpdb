@@ -1127,6 +1127,7 @@ appendonly_index_build_range_scan(Relation heapRelation,
 	Snapshot	snapshot;
 	bool		need_unregister_snapshot = false;
 	TransactionId OldestXmin;
+	AOTupleId  *aoTupleId;
 
 	/*
 	 * sanity checks
@@ -1282,6 +1283,13 @@ appendonly_index_build_range_scan(Relation heapRelation,
 		   !TransactionIdIsValid(OldestXmin));
 	Assert(snapshot == SnapshotAny || !anyvisible);
 
+	/*
+	 * We should not use SnapshotAny to look up the visimap to
+	 * avoid consulting dead visimap rows. This is guaranteed
+	 * at scan start. See aocs_beginscan for details.
+	 */
+	Assert(snapshot == SnapshotAny && aoscan->appendOnlyMetaDataSnapshot == SnapshotSelf);
+
 	/* set our scan endpoints */
 	if (!allow_sync)
 	{
@@ -1330,13 +1338,29 @@ appendonly_index_build_range_scan(Relation heapRelation,
 #endif
 
 		/*
-		 * appendonly_getnext did the time qual check
+		 * appendonly_getnextslot did the time qual check
 		 *
-		 * GPDB_12_MERGE_FIXME: in heapam, we do visibility checks in SnapshotAny case
-		 * here. Is that not needed with AO tables?
+		 * In heapam, we do visibility checks in SnapshotAny case here.
+		 * It is also necessary for Append-Optimized tables. Otherwise
+		 * CREATE INDEX and ANALYZE may produce wildly different reltuples
+		 * values, e.g. when there are many recently-dead tuples.
 		 */
-		tupleIsAlive = true;
-		reltuples += 1;
+		if (snapshot == SnapshotAny)
+		{
+			aoTupleId = (AOTupleId *) &slot->tts_tid;
+			if (AppendOnlyVisimap_IsVisible(&aoscan->visibilityMap, aoTupleId))
+			{
+				tupleIsAlive = true;
+				reltuples += 1;
+			}
+			else
+				tupleIsAlive = false;
+		}
+		else
+		{
+			tupleIsAlive = true;
+			reltuples += 1;
+		}
 
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 
