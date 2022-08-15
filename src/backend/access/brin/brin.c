@@ -412,7 +412,7 @@ brin_ao_tid_ranges(Relation rel, BlockNumber *aoblks)
 			{
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						errmsg("exceeded the range (0 ~ %d) of segment number %d",
+						 errmsg("exceeded the range (0 ~ %d) of segment number %d",
 								AOTupleId_MaxSegmentFileNum, segno)));
 				return InvalidBlockNumber;
 			}
