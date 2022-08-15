@@ -609,15 +609,7 @@ AppendOnlyBlockDirectory_GetEntry(
 		}
 	}
 
-	int idx = segno2idx(segmentFileNum);
-	if (!segno2idx_validate(idx))
-		ereport(ERROR,
-                (errcode(ERRCODE_INTERNAL_ERROR),
-                 errmsg("exceeded the range (0 ~ %d) of segment index %d",
-                        AOTupleId_MaxSegmentFileNum, idx)));
-
-	fsInfo = blockDirectory->segmentFileInfo[idx];
-	Assert(fsInfo != NULL);
+	GET_SEGINFO(blockDirectory->segmentFileInfo, segmentFileNum, fsInfo);
 
 	/*
 	 * Search the btree index to find the minipage that contains the rowNum.

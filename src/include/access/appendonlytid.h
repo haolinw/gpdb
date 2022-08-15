@@ -114,6 +114,21 @@ do {												\
 	segno_map_set(SEGNO_MAP_SIZE, (nsegs));			\
 } while (0)
 
+#define GET_SEGINFO(seginfos, segfileno, seginfo)							\
+do {																		\
+	int idx = segno2idx((segfileno));										\
+	if (!segno2idx_validate(idx))											\
+		ereport(ERROR,														\
+				(errcode(ERRCODE_INTERNAL_ERROR),							\
+				 errmsg("exceeded the range (0 ~ %d) of segment index %d",	\
+						AOTupleId_MaxSegmentFileNum, idx)));				\
+	Assert((seginfos) != NULL);												\
+	Assert(((seginfos) + idx) != NULL);										\
+	(seginfo) = (seginfos)[idx];											\
+	Assert((seginfo) != NULL);												\
+	Assert((seginfo)->segno == (segfileno));								\
+} while (0)
+
 extern int IDX2SEGNO[SEGNO_MAP_SIZE + 1];
 extern int SEGNO2IDX[SEGNO_MAP_SIZE + 1];
 

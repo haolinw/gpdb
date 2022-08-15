@@ -2130,7 +2130,7 @@ appendonly_fetch_init(Relation relation,
 			segno = 0;
 		else
 		{
-			segno = aoFetchDesc->segmentFileInfo[i]->segno);
+			segno = aoFetchDesc->segmentFileInfo[i]->segno;
 			aoFetchDesc->firstRowNum[i] = AOTupleId_MaxRowNum;
 		}
 		/* set corresponding bit for target segment */
@@ -2422,43 +2422,38 @@ bool
 appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
 						 AOTupleId *aoTupleId)
 {
-	int		segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
-	int64	rowNum = AOTupleIdGet_rowNum(aoTupleId);
+	int			segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
+	int64		rowNum = AOTupleIdGet_rowNum(aoTupleId);
+	FileSegInfo *segInfo;
+	bool		isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
 
-	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum] ||
-		rowNum < aoFetchDesc->firstRowNum[segmentFileNum])
+	if (rowNum >= aoFetchDesc->firstRowNum[segmentFileNum] &&
+		rowNum <= aoFetchDesc->lastRowNum[segmentFileNum])
+		goto visibility_check;
+
+	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
+	if(!AppendOnlyBlockDirectory_GetEntry(&aoFetchDesc->blockDirectory,
+											aoTupleId,
+											0,
+											curBlockDirectoryEntry))
+		return false;
+
+	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
 	{
-		AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
-		if(!AppendOnlyBlockDirectory_GetEntry(&aoFetchDesc->blockDirectory,
-											  aoTupleId,
-											  0,
-											  curBlockDirectoryEntry))
-			return false;
-
+		aoFetchDesc->lastRowNum[segmentFileNum] = curBlockDirectoryEntry->range.lastRowNum;
 		if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
-			aoFetchDesc->lastRowNum[segmentFileNum] = curBlockDirectoryEntry->range.lastRowNum;
-		if (rowNum < aoFetchDesc->firstRowNum[segmentFileNum])
-			aoFetchDesc->firstRowNum[segmentFileNum] = curBlockDirectoryEntry->range.firstRowNum;
-
-		int idx = segno2idx(segmentFileNum);
-		if (!segno2idx_validate(idx))
-			ereport(ERROR,
-					(errcode(ERRCODE_INTERNAL_ERROR),
-					errmsg("exceeded the range (0 ~ %d) of segment index %d",
-                        AOTupleId_MaxSegmentFileNum, idx)));
-
-		FileSegInfo *segInfo = aoFetchDesc->segmentFileInfo[idx];
-		Assert(segInfo);
-		Assert(segInfo->segno == segmentFileNum);
-
-		if (curBlockDirectoryEntry->range.afterFileOffset > segInfo->eof)
 			return false;
 	}
 
-	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
+	if (rowNum < aoFetchDesc->firstRowNum[segmentFileNum])
+		aoFetchDesc->firstRowNum[segmentFileNum] = curBlockDirectoryEntry->range.firstRowNum;
+
+	GET_SEGINFO(aoFetchDesc->segmentFileInfo, segmentFileNum, segInfo);
+
+	if (curBlockDirectoryEntry->range.afterFileOffset > segInfo->eof)
 		return false;
 
-	bool isSnapshotAny = (aoFetchDesc->snapshot == SnapshotAny);
+visibility_check:
 	if (!isSnapshotAny &&
 		!AppendOnlyVisimap_IsVisible(&aoFetchDesc->visibilityMap, aoTupleId))
 		return false; /* row has been deleted or updated. */
