@@ -2433,9 +2433,9 @@ appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
 
 	AppendOnlyBlockDirectoryEntry *curBlockDirectoryEntry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
 	if(!AppendOnlyBlockDirectory_GetEntry(&aoFetchDesc->blockDirectory,
-											aoTupleId,
-											0,
-											curBlockDirectoryEntry))
+										  aoTupleId,
+										  0,
+										  curBlockDirectoryEntry))
 		return false;
 
 	if (rowNum > aoFetchDesc->lastRowNum[segmentFileNum])
