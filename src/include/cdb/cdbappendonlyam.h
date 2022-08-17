@@ -318,9 +318,16 @@ typedef struct AppendOnlyFetchDescData
 	 * last sequence from gp_fastsequence.
 	 */
 	int64			lastSequence[AOTupleId_MultiplierSegmentFileNum];
+
+	/*
+	 * lastRowNum[] and firstRowNum[] cache the current scanning blockEntry's
+	 * corresponding range values for every segment file for checking the input
+	 * AOTupleId whether falling into this range or not.
+	 * It is used as a precondition for AO tuple tid visibility check in
+	 * IndexOnlyScan scenario.
+	 */
 	int64 			lastRowNum[AOTupleId_MultiplierSegmentFileNum];
 	int64 			firstRowNum[AOTupleId_MultiplierSegmentFileNum];
-
 
 	int32			usableBlockSize;
 
