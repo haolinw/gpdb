@@ -19,6 +19,7 @@
 #include "nodes/plannodes.h"
 
 struct Gang;
+struct PlanSlice;
 
 /**
  * DTX states, used to track the state of the distributed transaction
@@ -265,6 +266,10 @@ typedef enum
 extern int max_tm_gxacts;
 extern int gp_gxid_prefetch_num;
 
+/* whether we need a distributed snapshot or not, updated before each
+ * query been dispatched. */
+extern bool needDistributedSnapshot;
+
 extern DtxContext DistributedTransactionContext;
 
 /* state variables for how much of the log file has been flushed */
@@ -354,4 +359,6 @@ extern void SetDtxRecoveryEvent(DtxRecoveryEvent event);
 extern void DtxRecoveryMain(Datum main_arg);
 extern bool DtxRecoveryStartRule(Datum main_arg);
 
+/* check whether distributed snapshot is required */
+extern void checkNeedDistributedSnapshot(PlanSlice *slices, int numSlices);
 #endif   /* CDBTM_H */

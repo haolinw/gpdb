@@ -296,3 +296,14 @@ insert into t_alter_snapshot_test values (1, 1);
 
 select * from t_alter_snapshot_test;
 drop table t_alter_snapshot_test;
+
+
+-- test the distributed snapshot in the situation of direct dispatch
+create table direct_dispatch_snapshot_alpha(a int, b int);
+create table direct_dispatch_snapshot_beta(a int, b int);
+insert into direct_dispatch_snapshot_alpha select i, i from generate_series(1, 10) i;
+insert into direct_dispatch_snapshot_beta select i, i from generate_series(1, 10) i;
+
+select count(*) from direct_dispatch_snapshot_alpha where a = 5;
+select count(*) from direct_dispatch_snapshot_beta where a = 6;
+

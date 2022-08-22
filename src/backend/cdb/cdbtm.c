@@ -58,6 +58,8 @@
 #include "utils/snapmgr.h"
 #include "utils/memutils.h"
 
+#include "nodes/plannodes.h"
+
 typedef struct TmControlBlock
 {
 	bool						DtmStarted;
@@ -85,6 +87,7 @@ uint32 *shmNextSnapshotId;
 slock_t *shmGxidGenLock;
 
 int	max_tm_gxacts = 100;
+bool needDistributedSnapshot = true;
 
 int gp_gxid_prefetch_num;
 #define GXID_PRETCH_THRESHOLD (gp_gxid_prefetch_num>>1)
@@ -2435,4 +2438,14 @@ gp_get_next_gxid(PG_FUNCTION_ARGS)
 	SpinLockRelease(shmGxidGenLock);
 
 	PG_RETURN_UINT64(next_gxid);
+}
+
+void
+checkNeedDistributedSnapshot(PlanSlice *slices, int numSlices)
+{
+	int determinedSliceIndex = 1;
+	if (numSlices < 2)
+		needDistributedSnapshot = true;
+	else
+		needDistributedSnapshot = !slices[determinedSliceIndex].directDispatch.isDirectDispatch;
 }

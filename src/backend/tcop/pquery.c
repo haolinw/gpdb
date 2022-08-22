@@ -31,6 +31,7 @@
 #include "utils/snapmgr.h"
 
 #include "cdb/ml_ipc.h"
+#include "cdb/cdbtm.h"
 #include "commands/createas.h"
 #include "commands/queue.h"
 #include "commands/createas.h"
@@ -604,12 +605,23 @@ PortalStart(Portal portal, ParamListInfo params,
 		{
 			case PORTAL_ONE_SELECT:
 
+				{
+					if (!IsInTransactionBlock(true))
+					{
+						/* check whether we need to create distributed snapshot */
+						PlannedStmt *pstmt = linitial_node(PlannedStmt, portal->stmts);
+						checkNeedDistributedSnapshot(pstmt->slices, pstmt->numSlices);
+					}
+				}
+				
 				/* Must set snapshot before starting executor. */
 				if (snapshot)
 					PushActiveSnapshot(snapshot);
 				else
 					PushActiveSnapshot(GetTransactionSnapshot());
 
+				needDistributedSnapshot = true;
+				
 				/*
 				 * Create QueryDesc in portal's context; for the moment, set
 				 * the destination to DestNone.
