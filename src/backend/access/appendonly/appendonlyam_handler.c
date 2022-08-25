@@ -496,9 +496,9 @@ appendonly_index_fetch_tuple(struct IndexFetchTableData *scan,
 }
 
 static bool
-appendonly_tid_visible(struct IndexFetchTableData *scan,
-					   ItemPointer tid,
-					   Snapshot snapshot)
+appendonly_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
+					   				 ItemPointer tid,
+					   				 Snapshot snapshot)
 {
 	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
 	if (!aoscan->aofetch)
@@ -1977,7 +1977,7 @@ static const TableAmRoutine ao_row_methods = {
 	.index_fetch_reset = appendonly_index_fetch_reset,
 	.index_fetch_end = appendonly_index_fetch_end,
 	.index_fetch_tuple = appendonly_index_fetch_tuple,
-	.tid_visible = appendonly_tid_visible,
+	.index_fetch_tuple_visible = appendonly_index_fetch_tuple_visible,
 
 	.tuple_insert = appendonly_tuple_insert,
 	.tuple_insert_speculative = appendonly_tuple_insert_speculative,

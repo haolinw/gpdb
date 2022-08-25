@@ -700,7 +700,7 @@ aoco_index_fetch_tuple(struct IndexFetchTableData *scan,
 }
 
 static bool
-aocs_tid_visible(struct IndexFetchTableData *scan,
+aocs_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
 				 ItemPointer tid,
 				 Snapshot snapshot)
 {
@@ -1949,7 +1949,7 @@ static const TableAmRoutine ao_column_methods = {
 	.index_fetch_reset = aoco_index_fetch_reset,
 	.index_fetch_end = aoco_index_fetch_end,
 	.index_fetch_tuple = aoco_index_fetch_tuple,
-	.tid_visible = aocs_tid_visible,
+	.index_fetch_tuple_visible = aocs_index_fetch_tuple_visible,
 
 	.tuple_insert = aoco_tuple_insert,
 	.tuple_insert_speculative = aoco_tuple_insert_speculative,

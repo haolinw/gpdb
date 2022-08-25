@@ -49,6 +49,20 @@ static TupleTableSlot *IndexOnlyNext(IndexOnlyScanState *node);
 static void StoreIndexTuple(TupleTableSlot *slot, IndexTuple itup,
 							TupleDesc itupdesc);
 
+static inline bool
+IndexOnlyTupleVisible(struct IndexFetchTableData *scan,, ItemPointer tid, Snapshot snapshot, Buffer *vmbuf)
+{
+	/* for Heap */
+	if (vmbuf != NULL)
+	{
+		IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
+		return VM_ALL_VISIBLE(hscan->xs_base.rel, ItemPointerGetBlockNumber(tid), vmbuf);
+	}
+
+	/* for AO/CO */
+	return table_tuple_fetch_row_version(rel, tid, snapshot, NULL);
+}
+
 
 /* ----------------------------------------------------------------
  *		IndexOnlyNext
@@ -158,8 +172,9 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!scandesc->xs_heapfetch->rel->rd_tableam->tid_visible(
-				scandesc->xs_heapfetch, tid, scandesc->xs_snapshot))
+		if (!IndexOnlyTupleVisible(scandesc->xs_heapfetch->rel,
+								   tid,
+								   scandesc->xs_snapshot))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.

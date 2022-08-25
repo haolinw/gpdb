@@ -184,9 +184,9 @@ heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 }
 
 static bool
-heapam_tid_visible(struct IndexFetchTableData *scan,
-				   ItemPointer tid,
-				   Snapshot snapshot)
+heapam_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
+								 ItemPointer tid,
+								 Snapshot snapshot)
 {
 	IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
 
@@ -207,6 +207,11 @@ heapam_fetch_row_version(Relation relation,
 						 Snapshot snapshot,
 						 TupleTableSlot *slot)
 {
+	if (slot == NULL)
+	{
+		return VM_ALL_VISIBLE(relation, ItemPointerGetBlockNumber(tid), &hscan->xs_vbuf);
+	}
+
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
 	Buffer		buffer;
 
@@ -2655,7 +2660,7 @@ static const TableAmRoutine heapam_methods = {
 	.index_fetch_reset = heapam_index_fetch_reset,
 	.index_fetch_end = heapam_index_fetch_end,
 	.index_fetch_tuple = heapam_index_fetch_tuple,
-	.tid_visible = heapam_tid_visible,
+	.index_fetch_tuple_visible = heapam_index_fetch_tuple_visible,
 
 	.tuple_insert = heapam_tuple_insert,
 	.tuple_insert_speculative = heapam_tuple_insert_speculative,
