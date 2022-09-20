@@ -299,11 +299,42 @@ drop table t_alter_snapshot_test;
 
 
 -- test the distributed snapshot in the situation of direct dispatch
-create table direct_dispatch_snapshot_alpha(a int, b int);
-create table direct_dispatch_snapshot_beta(a int, b int);
-insert into direct_dispatch_snapshot_alpha select i, i from generate_series(1, 10) i;
-insert into direct_dispatch_snapshot_beta select i, i from generate_series(1, 10) i;
+create or replace language plpython3u;
 
-select count(*) from direct_dispatch_snapshot_alpha where a = 5;
-select count(*) from direct_dispatch_snapshot_beta where a = 6;
+create table direct_dispatch_snapshot_alpha(a int, b int);
+insert into direct_dispatch_snapshot_alpha select i, i from generate_series(1, 10) i;
+
+create function distributed_snapshot_test(is_direct_dispatch boolean) returns boolean as $$
+import re
+from pg import DB
+from copy import deepcopy
+
+dbname = plpy.execute("select current_database() db")[0]["db"]
+db = DB(dbname=dbname)
+
+info_results = []
+db.set_notice_receiver(lambda n: info_results.append(deepcopy(n.message)))
+
+db.query("set Debug_print_full_dtm = on")
+db.query("set client_min_messages = log")
+
+if is_direct_dispatch:
+	# should not create distributed snapshot
+	db.query("select * from direct_dispatch_snapshot_alpha where a = 6")
+else:
+	# should create distributed snapshot
+	db.query("select * from direct_dispatch_snapshot_alpha where b = 6")
+
+info_string = ", ".join(info_results)
+res = re.findall(r"Got distributed snapshot from CreateDistributedSnapshot", info_string)
+
+if (is_direct_dispatch and len(res) == 1) or (not is_direct_dispatch and len(res) == 2):
+	return True
+
+return False
+
+$$ language plpython3u;
+
+select distributed_snapshot_test(true);
+select distributed_snapshot_test(false);
 
