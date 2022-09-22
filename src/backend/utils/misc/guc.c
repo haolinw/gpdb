@@ -1352,7 +1352,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS
 		},
 		&NBuffers,
-		4096, 16, INT_MAX / 2, NULL, NULL
+		16, 16, INT_MAX / 2, NULL, NULL
 	},
 
 	{
@@ -1609,7 +1609,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_S | GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL | GUC_DISALLOW_USER_SET
 		},
 		&CheckPointTimeout,
-		300, 30, 3600, NULL, NULL
+		3600, 30, 3600, NULL, NULL
 	},
 
 	{

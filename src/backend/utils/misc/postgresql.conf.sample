@@ -112,7 +112,7 @@
 
 # - Memory -
 
-#shared_buffers = 128MB			# min 128kB or max_connections*16kB
+shared_buffers = 512kB			# min 128kB or max_connections*16kB
 					# (change requires restart)
 #temp_buffers = 8MB			# min 800kB
 max_prepared_transactions = 250		# can be 0 or more
