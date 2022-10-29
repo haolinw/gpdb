@@ -39,6 +39,7 @@
 		"gp_appendonly_compaction_threshold",
 		"gp_appendonly_verify_block_checksums",
 		"gp_appendonly_verify_write_block",
+		"gp_appendonly_enable_fast_analyze",
 		"gp_blockdirectory_entry_min_range",
 		"gp_blockdirectory_minipage_size",
 		"gp_debug_linger",
