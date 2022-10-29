@@ -126,56 +126,59 @@ BlockSampler_Next(BlockSampler bs)
  * design to conflict with upstream for some special case.
  */
 void
-ObjectSampler_Init(ObjectSampler os, int64 nobjects, int64 samplesize,
+RowSampler_Init(RowSampler rs, int64 nobjects, int64 samplesize,
 				   long randseed)
 {
-	os->N = nobjects;			/* measured table size */
+	rs->N = nobjects;			/* measured table size */
 
 	/*
 	 * If we decide to reduce samplesize for tables that have less or not much
 	 * more than samplesize objects, here is the place to do it.
 	 */
-	os->n = samplesize;
-	os->t = 0;					/* objects scanned so far */
-	os->m = 0;					/* objects selected so far */
+	rs->n = samplesize;
+	rs->t = 0;					/* objects scanned so far */
+	rs->m = 0;					/* objects selected so far */
 
-	sampler_random_init_state(randseed, os->randstate);
+	sampler_random_init_state(randseed, rs->randstate);
 }
 
 bool
-ObjectSampler_HasMore(ObjectSampler os)
+RowSampler_HasMore(RowSampler rs)
 {
-	return (os->t < os->N) && (os->m < os->n);
+	return (rs->t < rs->N) && (rs->m < rs->n);
 }
 
 int64
-ObjectSampler_Next(ObjectSampler os)
+RowSampler_Next(RowSampler rs)
 {
-	int64       K = os->N - os->t;	/* remaining objects */
-	int64		k = os->n - os->m;	/* objects still to sample */
+	int64       K = rs->N - rs->t;	/* remaining objects */
+	int64		k = rs->n - rs->m;	/* objects still to sample */
 	double		p;				    /* probability to skip object */
 	double		V;				    /* random */
 
-	Assert(ObjectSampler_HasMore(os));	/* hence K > 0 and k > 0 */
+	Assert(RowSampler_HasMore(rs));	/* hence K > 0 and k > 0 */
 
 	if (k >= K)
 	{
 		/* need all the rest */
-		os->m++;
-		return os->t++;
+		rs->m++;
+		return rs->t++;
 	}
 
     /* 
      * It is not obvious that this code matches Knuth's Algorithm S.
      * Refer to BlockSampler_Next() for detail.
      */
-	V = sampler_random_fract(os->randstate);
-    /* Don't bother overflow of conversion from int64 ? */
+	V = sampler_random_fract(rs->randstate);
+    /*
+	 * Don't bother overflow of conversion from int64 K (N) as it was
+	 * already converted to "double" range value when initialized.
+	 */
 	p = 1.0 - (double) k / (double) K;
 	while (V < p)
 	{
 		/* skip */
-		os->t++;
+		rs->t++;
 		K--; /* keep K == N - t */
 
 		/* adjust p to be new cutoff point in reduced range */
@@ -183,8 +186,8 @@ ObjectSampler_Next(ObjectSampler os)
 	}
 
 	/* select */
-	os->m++;
-	return os->t++;
+	rs->m++;
+	return rs->t++;
 }
 
 /*
