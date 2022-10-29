@@ -166,7 +166,10 @@ ObjectSampler_Next(ObjectSampler os)
      * Refer to BlockSampler_Next() for detail.
      */
 	V = sampler_random_fract(os->randstate);
-    /* Don't bother overflow of conversion from int64 ? */
+    /*
+	 * Don't bother overflow of conversion from int64 K (N) as it was
+	 * already converted to "double" range value when initialized.
+	 */
 	p = 1.0 - (double) k / (double) K;
 	while (V < p)
 	{

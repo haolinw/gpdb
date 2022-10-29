@@ -177,12 +177,21 @@ static void compute_index_stats(Relation onerel, double totalrows,
 								MemoryContext col_context);
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
 									   Node *index_expr, int elevel);
+static int acquire_sample_rows(Relation onerel, int elevel,
+							   HeapTuple *rows, int targrows,
+							   double *totalrows, double *totaldeadrows);
 static int acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 										  HeapTuple *rows, int targrows,
 										  double *totalrows, double *totaldeadrows);
+static int gp_acquire_sample_rows_func(Relation onerel, int elevel,
+									   HeapTuple *rows, int targrows,
+									   double *totalrows, double *totaldeadrows);
 static BlockNumber acquire_index_number_of_blocks(Relation indexrel, Relation tablerel);
 
 static int	compare_rows(const void *a, const void *b);
+static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
+										  HeapTuple *rows, int targrows,
+										  double *totalrows, double *totaldeadrows);
 static void update_attstats(Oid relid, bool inh,
 							int natts, VacAttrStats **vacattrstats);
 static Datum std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
@@ -340,7 +349,7 @@ analyze_rel_internal(Oid relid, RangeVar *relation,
 		onerel->rd_rel->relkind == RELKIND_MATVIEW)
 	{
 		/* Regular table, so we'll use the regular row acquisition function */
-		acquirefunc = acquire_sample_rows;
+		acquirefunc = gp_acquire_sample_rows_func;
 
 		/* Also get regular table's size */
 		relpages = AcquireNumberOfBlocks(onerel);
@@ -1384,6 +1393,32 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr, int elevel)
 }
 
 /*
+ * GPDB: If we are the dispatcher, then issue analyze on the segments and
+ * collect the statistics from them.
+ */
+int
+gp_acquire_sample_rows_func(Relation onerel, int elevel,
+							   HeapTuple *rows, int targrows,
+							   double *totalrows, double *totaldeadrows)
+{
+	if (Gp_role == GP_ROLE_DISPATCH &&
+		onerel->rd_cdbpolicy && !GpPolicyIsEntry(onerel->rd_cdbpolicy))
+	{
+		/* Fetch sample from the segments. */
+		return acquire_sample_rows_dispatcher(onerel, false, elevel,
+											  rows, targrows,
+											  totalrows, totaldeadrows);
+	}
+
+    if (gp_appendonly_enable_fast_analyze && RelationIsAppendOptimized(onerel))
+        return table_relation_acquire_sample_rows(onerel, elevel, rows, 
+									  	 		  targrows, totalrows, totaldeadrows);
+    
+    return acquire_sample_rows(onerel, elevel, rows,
+							   targrows, totalrows, totaldeadrows);
+}
+
+/*
  * acquire_sample_rows -- acquire a random sample of rows from the table
  *
  * Selected rows are returned in the caller-allocated array rows[], which
@@ -1415,14 +1450,8 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr, int elevel)
  * unbiased estimates of the average numbers of live and dead rows per
  * block.  The previous sampling method put too much credence in the row
  * density near the start of the table.
- *
- * The returned list of tuples is in order by physical position in the table.
- * (We will rely on this later to derive correlation estimates.)
- *
- * GPDB: If we are the dispatcher, then issue analyze on the segments and
- * collect the statistics from them.
  */
-int
+static int
 acquire_sample_rows(Relation onerel, int elevel,
 					HeapTuple *rows, int targrows,
 					double *totalrows, double *totaldeadrows)
@@ -1441,23 +1470,19 @@ acquire_sample_rows(Relation onerel, int elevel,
 
 	Assert(targrows > 0);
 
-	if (Gp_role == GP_ROLE_DISPATCH &&
-		onerel->rd_cdbpolicy && !GpPolicyIsEntry(onerel->rd_cdbpolicy))
-	{
-		/* Fetch sample from the segments. */
-		return acquire_sample_rows_dispatcher(onerel, false, elevel,
-											  rows, targrows,
-											  totalrows, totaldeadrows);
-	}
-
 	/*
-	 * GPDB: Analyze does make a lot of assumptions regarding the file layout of a
-	 * relation. These assumptions are heap specific and do not hold for AO/AOCO
-	 * relations. In the case of AO/AOCO, what is actually needed and used instead
-	 * of number of blocks, is number of tuples.
-	 *
-	 * GPDB_12_MERGE_FIXME: BlockNumber is uint32 and Number of tuples is uint64.
-	 * That means that after row number UINT_MAX we will never analyze the table.
+	 * GPDB: Legacy analyze does make a lot of assumptions regarding the file
+	 * layout of a relation. These assumptions are heap specific and do not hold
+	 * for AO/AOCO relations. In the case of AO/AOCO, what is actually needed and
+	 * used instead of number of blocks, is number of tuples. Moreover, BlockNumber
+	 * is uint32 and Number of tuples is uint64. That means that after row number
+	 * UINT_MAX we will never analyze the table.
+	 * 
+	 * We introduced a Fast Analyze for AO/CO tables specifically, this could
+	 * avoid above assumptions and make analyze on AO/CO faster than before.
+	 * Check gp_appendonly_enable_fast_analyze for more information.
+	 * 
+	 * We still leave this legacy analyze logic here for comparing purpose.
 	 */
 	if (RelationIsAppendOptimized(onerel))
 	{
@@ -1580,13 +1605,13 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 * Emit some interesting relation info
 	 */
 	ereport(elevel,
-		(errmsg("\"%s\": scanned %d of %u pages, "
-				"containing %.0f live rows and %.0f dead rows; "
-				"%d rows in sample, %.0f estimated total rows",
-				RelationGetRelationName(onerel),
-				bs.m, totalblocks,
-				liverows, deadrows,
-				numrows, *totalrows)));
+			(errmsg("\"%s\": scanned %d of %u pages, "
+					"containing %.0f live rows and %.0f dead rows; "
+					"%d rows in sample, %.0f estimated total rows",
+					RelationGetRelationName(onerel),
+					bs.m, totalblocks,
+					liverows, deadrows,
+					numrows, *totalrows)));
 
 	return numrows;
 }
@@ -1601,17 +1626,12 @@ compare_rows(const void *a, const void *b)
 	HeapTuple	hb = *(const HeapTuple *) b;
 
 	/*
-	 * GPDB_12_MERGE_FIXME: For AO/AOCO tables, blocknumber does not have a
-	 * meaning and is not set. The current implementation of analyze makes
-	 * assumptions about the file layout which do not hold for these two cases.
-	 * The compare function should maintain the row order as consrtucted, hence
-	 * return 0;
-	 *
+	 * For AO/AOCO tables, blocknumber does not have a meaning and is not set.
+	 * We leave this workaround here for legacy AO/CO analyze still working.
 	 * There should be no apparent and measurable perfomance hit from calling
 	 * this function.
-	 *
-	 * One possible proper fix is to refactor analyze to use the tableam api and
-	 * this sorting should move to the specific implementation.
+	 * 
+	 * The AO/CO Fast Analyze won't reach here anymore.
 	 */
 	if (!BlockNumberIsValid(ItemPointerGetBlockNumberNoCheck(&ha->t_self)))
 		return 0;
@@ -1732,7 +1752,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 			childrel->rd_rel->relkind == RELKIND_MATVIEW)
 		{
 			/* Regular table, so use the regular row acquisition function */
-			acquirefunc = acquire_sample_rows;
+			acquirefunc = gp_acquire_sample_rows_func;
 			relpages = AcquireNumberOfBlocks(childrel);
 		}
 		else if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)

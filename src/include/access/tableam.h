@@ -569,6 +569,13 @@ typedef struct TableAmRoutine
 											double *liverows,
 											double *deadrows,
 											TupleTableSlot *slot);
+	
+	int			(*relation_acquire_sample_rows) (Relation onerel,
+												 int elevel,
+												 HeapTuple *rows,
+												 int targrows,
+												 double *totalrows,
+												 double *totaldeadrows);
 
 	/* see table_index_build_range_scan for reference about parameters */
 	double		(*index_build_range_scan) (Relation table_rel,
@@ -1558,6 +1565,15 @@ table_relation_vacuum(Relation rel, struct VacuumParams *params,
 					  BufferAccessStrategy bstrategy)
 {
 	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+}
+
+static inline int
+table_relation_acquire_sample_rows(Relation rel, int elevel, HeapTuple *rows,
+								   int targrows, double *totalrows, double *totaldeadrows)
+{
+	return rel->rd_tableam->relation_acquire_sample_rows(rel, elevel, rows,
+														 targrows, totalrows,
+														 totaldeadrows);
 }
 
 /*

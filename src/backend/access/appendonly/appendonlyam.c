@@ -114,7 +114,7 @@ initscan(AppendOnlyScanDesc scan, ScanKey key)
 	scan->aos_segfiles_processed = 0;
 	scan->aos_need_new_segfile = true;	/* need to assign a file to be scanned */
 	scan->aos_done_all_segfiles = false;
-	scan->bufferDone = true;
+	scan->needNextBuffer = true;
 
 	if (scan->initedStorageRoutines)
 		AppendOnlyExecutorReadBlock_ResetCounts(
@@ -200,7 +200,7 @@ SetNextFileSegForRead(AppendOnlyScanDesc scan)
 										 &scan->storageRead,
 										 scan->usableBlockSize);
 
-		scan->bufferDone = true;	/* so we read a new buffer right away */
+		scan->needNextBuffer = true;	/* so we read a new buffer right away */
 
 		scan->initedStorageRoutines = true;
 	}
@@ -738,7 +738,7 @@ AppendOnlyExecutorReadBlock_Finish(AppendOnlyExecutorReadBlock *executorReadBloc
 static void
 AppendOnlyExecutorReadBlock_ResetCounts(AppendOnlyExecutorReadBlock *executorReadBlock)
 {
-	executorReadBlock->totalRowsScannned = 0;
+	executorReadBlock->totalRowsScanned = 0;
 }
 
 /*
@@ -1008,7 +1008,7 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 
 				executorReadBlock->currentItemCount++;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->totalRowsScanned++;
 
 				if (itemLen > 0)
 				{
@@ -1061,7 +1061,7 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 				executorReadBlock->singleRow = NULL;
 				executorReadBlock->singleRowLen = 0;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->totalRowsScanned++;
 
 				if (AppendOnlyExecutorReadBlock_ProcessTuple(
 															 executorReadBlock,
@@ -1215,6 +1215,139 @@ getNextBlock(AppendOnlyScanDesc scan)
 	return true;
 }
 
+static inline int64
+appendonly_getsegment_remaining_rows(AppendOnlyScanDesc scan)
+{
+	Assert(scan->aos_segfiles_processed > 0);
+	return (scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount - scan->cur_seg_rowsscanned);
+}
+
+static bool
+appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow) // [TODO using openFetchSegmentFile()]
+{
+	int64 rowcount;
+
+	/* haven't opened any segment file */
+	if (scan->aos_segfiles_processed <= 0)
+		Assert(scan->aos_need_new_segfile);
+	else
+	{
+		/* segment file is opened */
+		rowcount = appendonly_getsegment_remaining_rows(scan);
+		Assert(rowcount >= 0);
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+			/* haven't finished scanning on current segment */
+			scan->aos_need_new_segfile = false;
+		else
+		{
+			/* skip scanning remaining rows */
+			scan->nextrow += rowcount;
+			CloseScannedFileSeg(scan);
+		}
+	}
+
+	if (!scan->aos_need_new_segfile)
+		return true;
+
+	for (int i = scan->aos_segfiles_processed; i < scan->aos_total_segfiles; i++)
+	{
+		rowcount = scan->aos_segfile_arr[i]->total_tupcount;
+		if (rowcount <= 0)
+			continue;
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			/* found the target segment */
+			scan->aos_segfiles_processed = i;
+			if (SetNextFileSegForRead(scan))
+			{
+				/* new segment, reset cur_seg_rowsscanned */
+				scan->cur_seg_rowsscanned = 0;
+				return true;
+			}			
+		}
+
+		scan->nextrow += rowcount;
+		CloseScannedFileSeg(scan);
+		/* continue next segment */
+	}
+
+	/* done reading all segments */
+	Assert(scan->aos_done_all_segfiles);
+
+	return false;
+}
+
+static inline int64
+appendonly_getblock_remaining_rows(AppendOnlyScanDesc scan)
+{
+	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsScanned);
+}
+
+static bool
+appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
+{
+	AppendOnlyExecutorReadBlock *readblock = &scan->executorReadBlock;
+	int64 rowcount = -1;
+
+	if (readblock->rowCount <= 0)
+		/* haven't read block */
+		Assert(scan->needNextBuffer);
+	else
+	{
+		/* block was read */
+		rowcount = appendonly_getblock_remaining_rows(scan);
+		Assert(rowcount >= 0);
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+			/* haven't finished scanning on current block */
+			scan->needNextBuffer = false;
+		else
+		{
+			/* skip scanning remaining rows */
+			scan->nextrow += rowcount;
+			scan->needNextBuffer = true;
+		}
+	}
+
+	if (!scan->needNextBuffer)
+		return true;
+
+	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
+	{
+		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
+			 "nextrow: %ld, rowcount: %ld, cur_seg_rowsscanned: %ld, blockRowsScanned: %ld, "
+			 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
+			 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
+			 scan->cur_seg_rowsscanned, scan->executorReadBlock.blockRowsScanned,
+			 scan->executorReadBlock.rowCount);
+
+		/* new block, reset blockRowsScanned */
+		scan->executorReadBlock.blockRowsScanned = 0;
+		rowcount = appendonly_getblock_remaining_rows(scan);
+		Assert(rowcount > 0);
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			AppendOnlyExecutorReadBlock_GetContents(readblock);
+			/* got a new buffer to consume */
+			scan->needNextBuffer = false;
+			return true;
+		}
+
+		scan->nextrow += rowcount;
+		AppendOnlyExecutionReadBlock_FinishedScanBlock(readblock);
+		AppendOnlyStorageRead_SkipCurrentBlock(&scan->storageRead);
+		/* continue next block */
+	}
+
+	elog(ERROR, "Unexpected result was returned when getting AO block info.");
+
+	/* done reading the file */
+	CloseScannedFileSeg(scan);
+	return false;
+}
+
 /* ----------------
  *		appendonlygettup - fetch next appendonly tuple
  *
@@ -1243,8 +1376,11 @@ appendonlygettup(AppendOnlyScanDesc scan,
 	{
 		bool		found;
 
-		if (scan->bufferDone)
+		if (scan->needNextBuffer)
 		{
+			/* Fast Analyze should not reach here. */
+			Assert(!scan->fast_analyze);
+
 			/*
 			 * Get the next block. We call this function until we successfully
 			 * get a block to process, or finished reading all the data (all
@@ -1254,10 +1390,12 @@ appendonlygettup(AppendOnlyScanDesc scan,
 			{
 				/* have we read all this relation's data. done! */
 				if (scan->aos_done_all_segfiles)
+				{
 					return false;
+				}
 			}
 
-			scan->bufferDone = false;
+			scan->needNextBuffer = false;
 		}
 
 		found = AppendOnlyExecutorReadBlock_ScanNextTuple(&scan->executorReadBlock,
@@ -1289,8 +1427,11 @@ appendonlygettup(AppendOnlyScanDesc scan,
 		}
 		else
 		{
+			/* Fast Analyze should not reach here. */
+			Assert(!scan->fast_analyze);
+
 			/* no more items in the varblock, get new buffer */
-			scan->bufferDone = true;
+			scan->needNextBuffer = true;
 		}
 	}
 }
@@ -1526,6 +1667,22 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	scan->blockDirectory = NULL;
 
+	if (gp_appendonly_enable_fast_analyze && (flags & SO_TYPE_ANALYZE) != 0)
+	{
+		scan->fast_analyze = true;
+		scan->cur_seg_rowsscanned = 0;
+		scan->nextrow = 0;
+		scan->targrow = 0;
+		scan->totalrows = 0;
+		scan->totaldeadrows = 0;
+
+		for (int i = 0; i < segfile_count; i++)
+		{
+			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+				scan->totalrows += seginfo[i]->total_tupcount;
+		}
+	}
+
 	if (segfile_count > 0)
 	{
 		Oid			visimaprelid;
@@ -1539,6 +1696,9 @@ appendonly_beginrangescan_internal(Relation relation,
 							   visimapidxid,
 							   AccessShareLock,
 							   appendOnlyMetaDataSnapshot);
+
+		if (scan->fast_analyze)
+			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 	}
 
 	scan->totalBytesRead = 0;
@@ -1614,7 +1774,7 @@ appendonly_beginscan(Relation relation,
 	 */
 	seginfo = GetAllFileSegInfo(relation,
 								appendOnlyMetaDataSnapshot, &segfile_count, NULL);
-
+	
 	aoscan = appendonly_beginrangescan_internal(relation,
 												snapshot,
 												appendOnlyMetaDataSnapshot,
@@ -1733,6 +1893,31 @@ appendonly_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSl
 
 		return false;
 	}
+}
+
+bool
+appendonly_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
+	bool ret = false;
+
+	if (!appendonly_getsegment(aoscan, targrow))
+		return false;
+
+	if (!appendonly_getblock(aoscan, targrow))
+		return false;
+
+	int64 rowsscanned = aoscan->nextrow;
+	/* scan till to the target row */
+	for (; aoscan->nextrow <= targrow; aoscan->nextrow++)
+		ret = appendonly_getnextslot(scan, ForwardScanDirection, slot);
+	
+	rowsscanned = aoscan->nextrow - rowsscanned;
+
+	aoscan->cur_seg_rowsscanned += rowsscanned;
+	aoscan->executorReadBlock.blockRowsScanned += rowsscanned;
+
+	return ret;
 }
 
 static void

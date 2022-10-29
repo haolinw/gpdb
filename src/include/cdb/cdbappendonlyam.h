@@ -132,7 +132,8 @@ typedef struct AppendOnlyExecutorReadBlock
 
 	int				segmentFileNum;
 
-	int64			totalRowsScannned;
+	int64			totalRowsScanned;
+	int64			blockRowsScanned;
 
 	int64			blockFirstRowNum;
 	int64			headerOffsetInFile;
@@ -198,7 +199,7 @@ typedef struct AppendOnlyScanDescData
 	AppendOnlyExecutorReadBlock	executorReadBlock;
 
 	/* current scan state */
-	bool		bufferDone;
+	bool		needNextBuffer;
 
 	bool	initedStorageRoutines;
 
@@ -228,10 +229,14 @@ typedef struct AppendOnlyScanDescData
 	AppendOnlyVisimap visibilityMap;
 
 	/*
-	 * Only used by `analyze`
+	 * Only used by `fast analyze`
 	 */
-	int64		nextTupleId;
-	int64		targetTupleId;
+	bool		fast_analyze;
+	int64		cur_seg_rowsscanned;
+	int64		nextrow;
+	int64		targrow;
+	int64		totalrows;
+	int64		totaldeadrows;
 
 	/* For Bitmap scan */
 	int			rs_cindex;		/* current tuple's index in tbmres->offsets */
@@ -423,6 +428,9 @@ extern void appendonly_endscan(TableScanDesc scan);
 extern bool appendonly_getnextslot(TableScanDesc scan,
 								   ScanDirection direction,
 								   TupleTableSlot *slot);
+extern bool appendonly_get_target_tuple(TableScanDesc scan,
+										const int64 targrow,
+										TupleTableSlot *slot);
 extern AppendOnlyFetchDesc appendonly_fetch_init(
 	Relation 	relation,
 	Snapshot    snapshot,
