@@ -137,6 +137,7 @@ bool        Test_print_prefetch_joinqual = false;
 bool		Test_copy_qd_qe_split = false;
 bool		gp_permit_relation_node_change = false;
 int			gp_max_local_distributed_cache = 1024;
+bool		gp_appendonly_enable_fast_analyze = true;
 bool		gp_appendonly_enable_unique_index = false;
 bool		gp_appendonly_verify_block_checksums = true;
 bool		gp_appendonly_verify_write_block = false;
@@ -835,6 +836,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		},
 		&gp_debug_pgproc,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_appendonly_enable_fast_analyze", PGC_USERSET, DEVELOPER_OPTIONS,
+		 gettext_noop("Enable fast analyze on AO/CO tables (experimental)."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL
+		},
+		&gp_appendonly_enable_fast_analyze,
+		true,
 		NULL, NULL, NULL
 	},
 
