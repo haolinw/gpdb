@@ -1076,6 +1076,286 @@ getNextBlock(AppendOnlyScanDesc scan)
 	return true;
 }
 
+static int
+appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow, int *segidx)
+{
+	int64 rowcount;
+
+	for (int i = scan->aos_segfiles_processed; i < scan->aos_total_segfiles; i++)
+	{
+		rowcount = scan->aos_segfile_arr[i]->total_tupcount;
+		if (rowcount <= 0)
+			continue;
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			/* found the target segment */
+			if (segidx != NULL)
+				*segidx = i;
+
+			return scan->aos_segfile_arr[i]->segno;
+		}
+
+		scan->nextrow += rowcount;
+		/* continue next segment */
+	}
+
+	return -1;
+}
+
+/*
+ * Returns number of rows remaining in the current segfile.
+ */
+static inline int64
+appendonly_segment_remaining_rows(AppendOnlyScanDesc scan)
+{
+	Assert(scan->aos_segfiles_processed > 0);
+	return (scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount - scan->cur_seg_rows_scanned);
+}
+
+static int
+appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
+{
+	int64 rowcount;
+	int segno = -1;
+	int segidx;
+
+	/* haven't opened any segment file */
+	if (scan->aos_segfiles_processed <= 0)
+		Assert(scan->aos_need_new_segfile);
+	else
+	{
+		/* segment file is opened */
+		rowcount = appendonly_segment_remaining_rows(scan);
+		Assert(rowcount >= 0);
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+			/* haven't finished scanning on current segment */
+			scan->aos_need_new_segfile = false;
+		else
+		{
+			/* skip scanning remaining rows */
+			scan->nextrow += rowcount;
+			CloseScannedFileSeg(scan);
+		}
+
+		/* get current segno */
+		segno = scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->segno;
+	}
+
+	if (!scan->aos_need_new_segfile)
+		/* return current segno */
+		return segno;
+
+	/* locate the target segment */
+	segno = appendonly_locate_target_segment(scan, targrow, &segidx);
+	if (segno >= 0)
+	{
+		/* set position to the target segfile */
+		scan->aos_segfiles_processed = segidx;
+		if (SetNextFileSegForRead(scan))
+		{
+			/* new segment, reset cur_seg_rows_scanned */
+			scan->cur_seg_rows_scanned = 0;
+			return segno;
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Unexpected behavior, failed to open segno %d during scanning AO table %s",
+				 		segno, RelationGetRelationName(scan->aos_rd))));
+	}
+
+	CloseScannedFileSeg(scan);
+
+	/* done reading all segments */
+	Assert(scan->aos_done_all_segfiles);
+
+	return -1;
+}
+
+static inline int64
+appendonly_block_remaining_rows(AppendOnlyScanDesc scan)
+{
+	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsProcessed);
+}
+
+static bool
+appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
+{
+	AppendOnlyExecutorReadBlock *readblock = &scan->executorReadBlock;
+	int64 rowcount = -1;
+
+	if (readblock->rowCount <= 0)
+		/* haven't read block */
+		Assert(scan->needNextBuffer);
+	else
+	{
+		/* block was read */
+		rowcount = appendonly_block_remaining_rows(scan);
+		Assert(rowcount >= 0);
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+			/* haven't finished scanning on current block */
+			scan->needNextBuffer = false;
+		else
+		{
+			/* skip scanning remaining rows */
+			scan->nextrow += rowcount;
+			scan->needNextBuffer = true;
+		}
+	}
+
+	if (!scan->needNextBuffer)
+		return true;
+
+	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
+	{
+		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
+			 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, blockRowsProcessed: %ld, "
+			 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
+			 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
+			 scan->cur_seg_rows_scanned, scan->executorReadBlock.blockRowsProcessed,
+			 scan->executorReadBlock.rowCount);
+
+		/* new block, reset blockRowsProcessed */
+		scan->executorReadBlock.blockRowsProcessed = 0;
+		rowcount = appendonly_block_remaining_rows(scan);
+		Assert(rowcount > 0);
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			AppendOnlyExecutorReadBlock_GetContents(readblock);
+			/* got a new buffer to consume */
+			scan->needNextBuffer = false;
+			return true;
+		}
+
+		scan->nextrow += rowcount;
+		AppendOnlyExecutionReadBlock_FinishedScanBlock(readblock);
+		AppendOnlyStorageRead_SkipCurrentBlock(&scan->storageRead);
+		/* continue next block */
+	}
+
+	/* done reading the file */
+	CloseScannedFileSeg(scan);
+
+	elog(ERROR, "Unexpected result was returned when getting AO block info.");
+
+	return false;
+}
+
+static bool
+appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	int segno;
+	int64 rownum;
+	AOTupleId aotid;
+
+	Assert(scan->blkdirscan != NULL);
+
+	/* locate the target segment */
+	segno = appendonly_locate_target_segment(scan, targrow, NULL);
+	if (segno < 0)
+		return false;
+
+	/* locate the target row by seqscan block directory */
+	rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
+												segno,
+												0,
+												targrow,
+												&scan->nextrow);
+	if (rownum < 0)
+		return false;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	/* ensure the target minipage entry was stored in fetch descriptor */
+	Assert(scan->aofetch->blockDirectory.minipages == scan->blkdirscan->mpinfo);
+	Assert(scan->aofetch->blockDirectory.cached_mpentry_num != InvalidEntryNum);
+
+	/* fetch the target tuple */
+	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
+		return false;
+
+	/* OK to return this tuple */
+	pgstat_count_heap_fetch(scan->aos_rd);
+
+	return true;
+}
+
+/*
+ * Given a specific target row number 'targrow' (in the space of all row numbers
+ * physically present in the table, i.e. across all segfiles), scan and return
+ * the corresponding tuple in 'slot'.
+ *
+ * If the tuple is visible, return true. Otherwise, return false.
+ */
+bool
+appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
+{
+	AppendOnlyExecutorReadBlock *varblock = &aoscan->executorReadBlock;
+	bool ret = true;
+	bool isSnapshotAny = (aoscan->snapshot == SnapshotAny);
+	int64 rowstoscan, nrows, rownum;
+	int segno;
+	AOTupleId aotid;
+
+	if (aoscan->blkdirscan != NULL)
+		return appendonly_blkdirscan_get_target_tuple(aoscan, targrow, slot);
+
+	segno = appendonly_getsegment(aoscan, targrow);
+	if (segno < 0)
+		return false;
+
+	if (!appendonly_getblock(aoscan, targrow))
+		return false;
+
+	rowstoscan = targrow - aoscan->nextrow + 1;
+	/* nrows = blockRowsProcessed + rowstoscan */
+	nrows = aoscan->executorReadBlock.blockRowsProcessed + rowstoscan;
+	/* rowNum = blockFirstRowNum + nrows - 1 */
+	rownum = varblock->blockFirstRowNum + nrows - 1;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&aoscan->visibilityMap, &aotid))
+	{
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+	/* fetch the target tuple */
+	if (!AppendOnlyExecutorReadBlock_FetchTuple(varblock, rownum, 0, NULL, slot))
+	{
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+out:
+	/* update rows scanned */
+	aoscan->cur_seg_rows_scanned += rowstoscan;
+	aoscan->executorReadBlock.blockRowsProcessed += rowstoscan;
+	/* update nextrow position */
+	aoscan->nextrow = targrow + 1;
+
+	if (ret)
+	{
+		/* OK to return this tuple */
+		pgstat_count_heap_fetch(aoscan->aos_rd);
+	}
+	else
+	{
+		if (slot != NULL)
+			ExecClearTuple(slot);
+	}
+
+	return ret;
+}
+
 /* ----------------
  *		appendonlygettup - fetch next appendonly tuple
  *
@@ -1096,6 +1376,8 @@ appendonlygettup(AppendOnlyScanDesc scan,
 				 TupleTableSlot *slot)
 {
 	Assert(ScanDirectionIsForward(dir));
+	/* should not be in ANALYZE */
+	Assert((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) == 0);
 	Assert(scan->usableBlockSize > 0);
 
 	bool		isSnapshotAny = (scan->snapshot == SnapshotAny);
@@ -1135,12 +1417,7 @@ appendonlygettup(AppendOnlyScanDesc scan,
 
 			if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, aoTupleId))
 			{
-				/*
-				 * The tuple is invisible.
-				 * In `analyze`, we can simply return false
-				 */
-				if ((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) != 0)
-					return false;
+				/* The tuple is invisible */
 			}
 			else
 			{
@@ -1263,6 +1540,35 @@ finishWriteBlock(AppendOnlyInsertDesc aoInsertDesc)
 	Assert(!AppendOnlyStorageWrite_IsBufferAllocated(&aoInsertDesc->storageWrite));
 }
 
+static void
+appendonly_blkdirscan_init(AppendOnlyScanDesc scan)
+{
+	if (scan->aofetch == NULL)
+		scan->aofetch = appendonly_fetch_init(scan->aos_rd,
+											  scan->snapshot,
+											  scan->appendOnlyMetaDataSnapshot);
+
+	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
+	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
+													   &scan->aofetch->blockDirectory);
+}
+
+static void
+appendonly_blkdirscan_finish(AppendOnlyScanDesc scan)
+{
+	AppendOnlyBlockDirectory_End_forSearch_InSequence(scan->blkdirscan);
+	pfree(scan->blkdirscan);
+	scan->blkdirscan = NULL;
+
+	if (scan->aofetch != NULL)
+	{
+		appendonly_fetch_finish(scan->aofetch);
+		pfree(scan->aofetch);
+		scan->aofetch = NULL;
+	}
+}
+
+
 /* ----------------------------------------------------------------
  *					 append-only access method interface
  * ----------------------------------------------------------------
@@ -1384,17 +1690,43 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	scan->blockDirectory = NULL;
 
+	if ((flags & SO_TYPE_ANALYZE) != 0)
+	{
+		scan->cur_seg_rows_scanned = 0;
+		scan->nextrow = 0;
+		scan->targrow = 0;
+		scan->totalrows = 0;
+		scan->totaldeadrows = 0;
+
+		for (int i = 0; i < segfile_count; i++)
+		{
+			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+				scan->totalrows += seginfo[i]->total_tupcount;
+		}
+	}
+
 	if (segfile_count > 0)
 	{
 		Oid			visimaprelid;
+		Oid			blkdirrelid;
 
 		GetAppendOnlyEntryAuxOids(relation,
-								  NULL, NULL, &visimaprelid);
+								  NULL,
+								  &blkdirrelid,
+								  &visimaprelid);
 
 		AppendOnlyVisimap_Init(&scan->visibilityMap,
 							   visimaprelid,
 							   AccessShareLock,
 							   appendOnlyMetaDataSnapshot);
+
+		if ((flags & SO_TYPE_ANALYZE) != 0)
+		{
+			if (OidIsValid(blkdirrelid))
+				appendonly_blkdirscan_init(scan);
+
+			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
+		}
 	}
 
 	scan->totalBytesRead = 0;
@@ -1470,7 +1802,7 @@ appendonly_beginscan(Relation relation,
 	 */
 	seginfo = GetAllFileSegInfo(relation,
 								appendOnlyMetaDataSnapshot, &segfile_count, NULL);
-
+	
 	aoscan = appendonly_beginrangescan_internal(relation,
 												snapshot,
 												appendOnlyMetaDataSnapshot,
@@ -1552,6 +1884,9 @@ appendonly_endscan(TableScanDesc scan)
 
 	if (aoscan->aos_total_segfiles > 0)
 		AppendOnlyVisimap_Finish(&aoscan->visibilityMap, AccessShareLock);
+
+	if (aoscan->blkdirscan != NULL)
+		appendonly_blkdirscan_finish(aoscan);
 
 	if (aoscan->aofetch)
 	{

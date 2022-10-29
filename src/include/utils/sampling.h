@@ -50,14 +50,14 @@ typedef struct
 	int64           t;				/* current object number */
 	int64			m;				/* objects selected so far */
 	SamplerRandomState randstate;	/* random generator state */
-} ObjectSamplerData;
+} RowSamplerData;
 
-typedef ObjectSamplerData *ObjectSampler;
+typedef RowSamplerData *RowSampler;
 
-extern void ObjectSampler_Init(ObjectSampler os, int64 nobjects,
+extern void RowSampler_Init(RowSampler rs, int64 nobjects,
 							   int64 samplesize, long randseed);
-extern bool ObjectSampler_HasMore(ObjectSampler os);
-extern int64 ObjectSampler_Next(ObjectSampler os);
+extern bool RowSampler_HasMore(RowSampler rs);
+extern int64 RowSampler_Next(RowSampler rs);
 
 /* Reservoir sampling methods */
 
