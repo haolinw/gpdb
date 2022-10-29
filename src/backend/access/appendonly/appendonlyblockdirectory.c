@@ -48,7 +48,8 @@ static void extract_minipage(
 				 AppendOnlyBlockDirectory *blockDirectory,
 				 HeapTuple tuple,
 				 TupleDesc tupleDesc,
-				 int columnGroupNo);
+				 int columnGroupNo,
+				 bool is_segno_set);
 static void write_minipage(AppendOnlyBlockDirectory *blockDirectory,
 			   int columnGroupNo,
 			   MinipagePerColumnGroup *minipageInfo);
@@ -219,6 +220,18 @@ AppendOnlyBlockDirectory_Init_forSearch(
 		index_open(blkdiridxid, AccessShareLock);
 
 	init_internal(blockDirectory);
+}
+
+void
+AppendOnlyBlockDirectory_Init_forSearch_InSequence(AOBlkDirScan blkdirscan,
+												   AppendOnlyBlockDirectory *blkdir)
+{
+	blkdirscan->blkdir = blkdir;
+	blkdirscan->sysscan = NULL;
+	blkdirscan->segno = -1;
+	blkdirscan->colgroup = 0;
+	blkdirscan->mpinfo = NULL;
+	blkdirscan->mpentryi = 0;
 }
 
 /*
@@ -743,7 +756,8 @@ AppendOnlyBlockDirectory_GetEntry(
 			extract_minipage(blockDirectory,
 							 tuple,
 							 heapTupleDesc,
-							 tmpGroupNo);
+							 tmpGroupNo,
+							 true);
 		}
 		else
 		{
@@ -947,7 +961,8 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 		extract_minipage(blockDirectory,
 						 tuple,
 						 blkdirTupleDesc,
-						 columnGroupNo);
+						 columnGroupNo,
+						 true);
 
 		minipageInfo = &blockDirectory->minipages[columnGroupNo];
 		entry_no = find_minipage_entry(minipageInfo->minipage,
@@ -1214,7 +1229,8 @@ static void
 extract_minipage(AppendOnlyBlockDirectory *blockDirectory,
 				 HeapTuple tuple,
 				 TupleDesc tupleDesc,
-				 int columnGroupNo)
+				 int columnGroupNo,
+				 bool is_segno_set)
 {
 	Datum	   *values = blockDirectory->values;
 	bool	   *nulls = blockDirectory->nulls;
@@ -1222,8 +1238,9 @@ extract_minipage(AppendOnlyBlockDirectory *blockDirectory,
 
 	heap_deform_tuple(tuple, tupleDesc, values, nulls);
 
-	Assert(blockDirectory->currentSegmentFileNum ==
-		   DatumGetInt32(values[Anum_pg_aoblkdir_segno - 1]));
+	if (is_segno_set)
+		Assert(blockDirectory->currentSegmentFileNum ==
+			DatumGetInt32(values[Anum_pg_aoblkdir_segno - 1]));
 
 	/*
 	 * Copy out the minipage
@@ -1295,7 +1312,8 @@ load_last_minipage(AppendOnlyBlockDirectory *blockDirectory,
 		extract_minipage(blockDirectory,
 						 tuple,
 						 heapTupleDesc,
-						 columnGroupNo);
+						 columnGroupNo,
+						 true);
 	}
 
 	systable_endscan_ordered(idxScanDesc);
@@ -1593,6 +1611,29 @@ AppendOnlyBlockDirectory_End_forSearch(
 	MemoryContextDelete(blockDirectory->memoryContext);
 }
 
+/* should be called before fetch_finish() */
+void
+AppendOnlyBlockDirectory_End_forSearch_InSequence(AOBlkDirScan blkdirscan)
+{
+	/*
+	 * Make sure blkdir hasn't been destroyed by fetch_finish(),
+	 * or systable_endscan_ordered() will be crashed for sysscan
+	 * is holding blkdir relation which is freed.
+	 */
+	Assert(blkdirscan->blkdir != NULL);
+
+	if (blkdirscan->sysscan != NULL)
+	{
+		systable_endscan_ordered(blkdirscan->sysscan);
+		blkdirscan->sysscan = NULL;
+	}
+	blkdirscan->segno = -1;
+	blkdirscan->colgroup = 0;
+	blkdirscan->mpinfo = NULL;
+	blkdirscan->mpentryi = 0;
+	blkdirscan->blkdir = NULL;
+}
+
 void
 AppendOnlyBlockDirectory_End_addCol(
 									AppendOnlyBlockDirectory *blockDirectory)
@@ -1680,4 +1721,102 @@ AppendOnlyBlockDirectory_End_forIndexOnlyScan(AppendOnlyBlockDirectory *blockDir
 	heap_close(blockDirectory->blkdirRel, AccessShareLock);
 
 	MemoryContextDelete(blockDirectory->memoryContext);
+}
+
+int64
+AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
+								   int targsegno,
+								   int colgroup,
+								   int64 targrow,
+								   int64 *startrow)
+{
+	HeapTuple tuple;
+	TupleDesc tupdesc;
+	AppendOnlyBlockDirectory *blkdir = blkdirscan->blkdir;
+	int64 rownum = -1;
+
+	Assert(targsegno >= 0);
+	Assert(blkdir != NULL);
+
+	if (blkdirscan->segno != targsegno || blkdirscan->colgroup != colgroup)
+	{
+		if (blkdirscan->sysscan != NULL)
+			systable_endscan_ordered(blkdirscan->sysscan);
+
+		ScanKeyData	scankeys[2];
+		
+		ScanKeyInit(&scankeys[0],
+					1,				/* segno */
+					BTEqualStrategyNumber,
+					F_INT4EQ,
+					Int32GetDatum(targsegno));
+		
+		ScanKeyInit(&scankeys[1],
+					2,				/* colgroup */
+					BTEqualStrategyNumber,
+					F_INT4EQ,
+					Int32GetDatum(colgroup));
+		
+		blkdirscan->sysscan = systable_beginscan_ordered(blkdir->blkdirRel,
+														 blkdir->blkdirIdx,
+														 blkdir->appendOnlyMetaDataSnapshot,
+														 2, /* nkeys */
+														 scankeys);
+		blkdirscan->segno = targsegno;
+		blkdirscan->colgroup = colgroup;
+	}
+
+	while (true)
+	{
+		if (blkdirscan->mpinfo == NULL)
+		{
+			tuple = systable_getnext_ordered(blkdirscan->sysscan, ForwardScanDirection);
+			if (HeapTupleIsValid(tuple))
+			{
+				tupdesc = RelationGetDescr(blkdirscan->blkdir->blkdirRel);
+				extract_minipage(blkdir, tuple, tupdesc, colgroup, false);
+				/* new minipage */
+				blkdirscan->mpinfo = &blkdir->minipages[colgroup];
+				blkdirscan->mpentryi = 0;
+			}
+			else
+			{	
+				/* done this < segno, colgroup > */
+				systable_endscan_ordered(blkdirscan->sysscan);
+				blkdirscan->sysscan = NULL;
+				blkdirscan->segno = -1;
+				blkdirscan->colgroup = 0;
+				return rownum;
+			}
+		}
+
+		Assert(blkdirscan->mpinfo != NULL);
+
+		MinipagePerColumnGroup *mpinfo = blkdirscan->mpinfo;
+		Minipage *mp = mpinfo->minipage;
+		MinipageEntry *entry;
+
+		for (int i = blkdirscan->mpentryi; i < mpinfo->numMinipageEntries; i++)
+		{
+			entry = &(mp->entry[i]);
+
+			Assert(entry->firstRowNum > 0);
+			Assert(entry->rowCount > 0);
+
+			if (*startrow + entry->rowCount - 1 >= targrow)
+			{
+				rownum = entry->firstRowNum + (targrow - *startrow);
+				blkdirscan->mpentryi = i;
+				return rownum;
+			}
+
+			*startrow += entry->rowCount;
+		}
+
+		/* done this minipage */
+		blkdirscan->mpinfo = NULL;
+		blkdirscan->mpentryi = 0;
+	}
+
+	return rownum;
 }
