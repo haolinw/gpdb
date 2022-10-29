@@ -112,6 +112,11 @@ open_all_datumstreamread_segfiles(AOCSScanDesc scan, AOCSFileSegInfo *segInfo)
 		AttrNumber	attno = proj_atts[i];
 
 		open_datumstreamread_segfile(basepath, rel, segInfo, ds[attno], attno);
+
+		/* skip reading block for ANALYZE */
+		if ((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) != 0)
+			continue;
+
 		datumstreamread_block(ds[attno], blockDirectory, attno);
 
 		AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
@@ -294,7 +299,7 @@ close_ds_write(DatumStreamWrite **ds, int nvp)
 }
 
 static void
-initscan_with_colinfo(AOCSScanDesc scan)
+initscan(AOCSScanDesc scan)
 {
 	MemoryContext	oldCtx;
 	AttrNumber		natts;
@@ -326,13 +331,28 @@ initscan_with_colinfo(AOCSScanDesc scan)
 	MemoryContextSwitchTo(oldCtx);
 
 	scan->cur_seg = -1;
-	scan->cur_seg_row = 0;
+	scan->cur_seg_rows_scanned = 0;
 
 	ItemPointerSet(&scan->cdb_fake_ctid, 0, 0);
 
 	scan->totalBytesRead = 0;
 
 	pgstat_count_heap_scan(scan->rs_base.rs_rd);
+}
+
+/*
+ * init scan with TupleDesc
+ */
+void
+aocs_initscan(AOCSScanDesc scan, TupleDesc tupdesc)
+{
+	if (scan->columnScanInfo.relationTupleDesc == NULL)
+	{
+		scan->columnScanInfo.relationTupleDesc = tupdesc;
+		/* Pin it! ... and of course release it upon destruction / rescan */
+		PinTupleDesc(scan->columnScanInfo.relationTupleDesc);
+		initscan(scan);
+	}
 }
 
 static int
@@ -426,6 +446,47 @@ close_cur_scan_seg(AOCSScanDesc scan)
 		AppendOnlyBlockDirectory_End_forInsert(scan->blockDirectory);
 }
 
+static void
+aocs_blkdirscan_init(AOCSScanDesc scan)
+{
+	if (scan->aocsfetch == NULL)
+	{
+		int natts = RelationGetNumberOfAttributes(scan->rs_base.rs_rd);
+		scan->proj = palloc(natts * sizeof(*scan->proj));
+		MemSet(scan->proj, true, natts * sizeof(*scan->proj));
+
+		scan->aocsfetch = aocs_fetch_init(scan->rs_base.rs_rd,
+										  scan->rs_base.rs_snapshot,
+										  scan->appendOnlyMetaDataSnapshot,
+										  scan->proj);
+	}
+
+	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
+	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
+													   &scan->aocsfetch->blockDirectory);
+}
+
+static void
+aocs_blkdirscan_finish(AOCSScanDesc scan)
+{
+	AppendOnlyBlockDirectory_End_forSearch_InSequence(scan->blkdirscan);
+	pfree(scan->blkdirscan);
+	scan->blkdirscan = NULL;
+
+	if (scan->aocsfetch != NULL)
+	{
+		aocs_fetch_finish(scan->aocsfetch);
+		pfree(scan->aocsfetch);
+		scan->aocsfetch = NULL;
+	}
+
+	if (scan->proj != NULL)
+	{
+		pfree(scan->proj);
+		scan->proj = NULL;
+	}
+}
+
 /*
  * aocs_beginrangescan
  *
@@ -506,6 +567,7 @@ aocs_beginscan_internal(Relation relation,
 	AOCSScanDesc	scan;
 	AttrNumber		natts;
 	Oid				visimaprelid;
+	Oid				blkdirrelid;
 
 	scan = (AOCSScanDesc) palloc0(sizeof(AOCSScanDescData));
 	scan->rs_base.rs_rd = relation;
@@ -545,6 +607,20 @@ aocs_beginscan_internal(Relation relation,
 
 	scan->columnScanInfo.ds = NULL;
 
+	if ((flags & SO_TYPE_ANALYZE) != 0)
+	{
+		scan->nextrow = 0;
+		scan->targrow = 0;
+		scan->totalrows = 0;
+		scan->totaldeadrows = 0;
+
+		for (int i = 0; i < total_seg; i++)
+		{
+			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+				scan->totalrows += seginfo[i]->total_tupcount;
+		}
+	}
+
 	GetAppendOnlyEntryAttributes(RelationGetRelid(relation),
 								 NULL,
 								 NULL,
@@ -552,14 +628,25 @@ aocs_beginscan_internal(Relation relation,
 								 NULL);
 
 	GetAppendOnlyEntryAuxOids(relation,
-							  NULL, NULL,
+							  NULL,
+							  &blkdirrelid,
 							  &visimaprelid);
 
 	if (scan->total_seg != 0)
+	{
 		AppendOnlyVisimap_Init(&scan->visibilityMap,
 							   visimaprelid,
 							   AccessShareLock,
 							   appendOnlyMetaDataSnapshot);
+
+		if ((flags & SO_TYPE_ANALYZE) != 0)
+		{
+			if (OidIsValid(blkdirrelid))
+				aocs_blkdirscan_init(scan);
+
+			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
+		}
+	}
 
 	return scan;
 }
@@ -570,7 +657,7 @@ aocs_rescan(AOCSScanDesc scan)
 	close_cur_scan_seg(scan);
 	if (scan->columnScanInfo.ds)
 		close_ds_read(scan->columnScanInfo.ds, scan->columnScanInfo.relationTupleDesc->natts);
-	initscan_with_colinfo(scan);
+	initscan(scan);
 }
 
 void
@@ -613,9 +700,318 @@ aocs_endscan(AOCSScanDesc scan)
 	if (scan->total_seg != 0)
 		AppendOnlyVisimap_Finish(&scan->visibilityMap, AccessShareLock);
 
+	if (scan->blkdirscan != NULL)
+		aocs_blkdirscan_finish(scan);
+
 	RelationDecrementReferenceCount(scan->rs_base.rs_rd);
 
 	pfree(scan);
+}
+
+static int
+aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow, int *segidx)
+{
+	int64 rowcount;
+
+	for (int i = scan->cur_seg; i < scan->total_seg; i++)
+	{
+		if (i < 0)
+			continue;
+
+		rowcount = scan->seginfo[i]->total_tupcount;
+		if (rowcount <= 0)
+			continue;
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			/* found the target segment */
+			if (segidx != NULL)
+				*segidx = i;
+
+			return scan->seginfo[i]->segno;
+		}
+
+		scan->nextrow += rowcount;
+		/* continue next segment */
+	}
+
+	return -1;
+}
+
+bool
+aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	int segno;
+	int64 rownum = -1;
+	AOTupleId aotid;
+	int ncols = scan->columnScanInfo.relationTupleDesc->natts;
+
+	Assert(scan->blkdirscan != NULL);
+
+	/* locate the target segment */
+	segno = aocs_locate_target_segment(scan, targrow, NULL);
+	if (segno < 0)
+		return false;
+
+	/* locate the target row by seqscan block directory */
+	for (int col = 0; col < ncols; col++)
+	{
+		/* reset the startrow for every column */
+		int64 startrow = scan->nextrow;
+
+		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
+			continue;
+
+		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
+													segno,
+													col,
+													targrow,
+													&startrow);
+		if (rownum < 0)
+			continue;
+
+		/* finally, set the nextrow to the proper position */
+		scan->nextrow = startrow;
+		break;
+	}
+
+	if (rownum < 0)
+		return false;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	ExecClearTuple(slot);
+
+	/* ensure no cached minipage entry as it is disabled for ao_column tables */
+	Assert(scan->aocsfetch->blockDirectory.cached_mpentry_num == InvalidEntryNum);
+
+	/* fetch the target tuple */
+	if(!aocs_fetch(scan->aocsfetch, &aotid, slot))
+		return false;
+
+	/* OK to return this tuple */
+	ExecStoreVirtualTuple(slot);
+	pgstat_count_heap_fetch(scan->rs_base.rs_rd);
+
+	return true;
+}
+
+static inline int64
+aocs_segment_remaining_rows(AOCSScanDesc scan)
+{
+	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->cur_seg_rows_scanned);
+}
+
+bool
+aocs_getsegment(AOCSScanDesc scan, int64 targrow)
+{
+	int segno, segidx;
+	int64 rowcount;
+
+	if (scan->cur_seg >= 0)
+	{
+		/* segment file is opened */
+		rowcount = aocs_segment_remaining_rows(scan);
+		Assert(rowcount >= 0);
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+			/* haven't finished scanning on current segment */
+			return true;
+		
+		/* skip scanning remaining rows */
+		scan->nextrow += rowcount;
+		close_cur_scan_seg(scan);
+	}
+
+	/* locate the target segment */
+	segno = aocs_locate_target_segment(scan, targrow, &segidx);
+	if (segno >= 0)
+	{
+		/* adjust cur_seg to fit for open_next_scan_seg() */
+		scan->cur_seg = segidx - 1;
+		if (open_next_scan_seg(scan) >= 0)
+		{
+			/* new segment, reset cur_seg_rows_scanned */
+			scan->cur_seg_rows_scanned = 0;
+			return true;
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
+				 		segno, RelationGetRelationName(scan->rs_base.rs_rd))));
+	}
+
+	/* done reading all segments */
+	close_cur_scan_seg(scan);
+	scan->cur_seg = -1;
+	return false;
+}
+
+static inline int
+aocs_block_remaining_rows(DatumStreamRead *ds)
+{
+	return (ds->blockRowCount - ds->blockRowsProcessed);
+}
+
+bool
+aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	bool ret = true;
+	int64 rowcount = -1;
+	int64 rowstoscan;
+	bool chkvisimap = true;
+
+	Assert(scan->cur_seg >= 0);
+	Assert(slot != NULL);
+
+	ExecClearTuple(slot);
+
+	/* read from scan->cur_seg */
+	for (AttrNumber i = 0; i < scan->columnScanInfo.num_proj_atts; i++)
+	{
+		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
+		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
+		int64 startrow = scan->nextrow;
+
+		if (ds->blockRowCount <= 0)
+			; /* haven't read block */
+		else
+		{
+			/* block was read */
+			rowcount = aocs_block_remaining_rows(ds);
+			Assert(rowcount >= 0);
+
+			if (startrow + rowcount - 1 >= targrow)
+			{
+				if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
+				{
+					ret = false;
+					/* must update tracking vars before return */
+					goto out;
+				}
+
+				chkvisimap = false;
+				/* haven't finished scanning on current block */
+				continue;
+			}
+			else
+				startrow += rowcount; /* skip scanning remaining rows */
+		}
+
+		while (true)
+		{
+			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
+				 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, nth: %d, "
+				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
+				 startrow+ rowcount - 1 - targrow, startrow, rowcount,
+				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount,
+				 ds->blockRowsProcessed);
+
+			if (datumstreamread_block_info(ds))
+			{
+				rowcount = ds->blockRowCount;
+				Assert(rowcount > 0);
+
+				/* new block, reset blockRowsProcessed */
+				ds->blockRowsProcessed = 0;
+
+				if (startrow + rowcount - 1 >= targrow)
+				{
+					/* read a new buffer to consume */
+					datumstreamread_block_content(ds);
+
+					if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
+					{
+						ret = false;
+						/* must update tracking vars before return */
+						goto out;
+					}
+
+					chkvisimap = false;
+					/* done this column */
+					break;
+				}
+
+				startrow += rowcount;
+				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
+				/* continue next block */
+			}
+			else
+			{
+				/* should not reach here */
+				elog(ERROR, "Unexpected result was returned when getting AOCO block info.");
+			}
+		}
+	}
+
+out:
+	/* update rows scanned */
+	rowstoscan = targrow - scan->nextrow + 1;
+	scan->cur_seg_rows_scanned += rowstoscan;
+	/* update nextrow position */
+	scan->nextrow = targrow + 1;
+
+	if (ret)
+	{
+		ExecStoreVirtualTuple(slot);
+		pgstat_count_heap_getnext(scan->rs_base.rs_rd);
+	}
+
+	return ret;
+}
+
+bool
+aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, bool chkvisimap, TupleTableSlot *slot)
+{
+	bool isSnapshotAny = (scan->rs_base.rs_snapshot == SnapshotAny);
+	DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
+	int segno = scan->seginfo[scan->cur_seg]->segno;
+	AOTupleId aotid;
+	bool ret = true;
+	int64 rowstoscan, nrows, rownum;
+	Datum *values;
+	bool *nulls;
+
+	if (ds->blockFirstRowNum <= 0)
+		elog(ERROR, "AOCO varblock->blockFirstRowNum should be greater than zero.");
+
+	Assert(segno >= 0);
+	Assert(startrow <= endrow);
+
+	rowstoscan = endrow - startrow + 1;
+	/* nrows = blockRowsProcessed + rowstoscan */
+	nrows = ds->blockRowsProcessed + rowstoscan;
+	/* rowNum = blockFirstRowNum + nrows - 1 */
+	rownum = ds->blockFirstRowNum + nrows - 1;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	if (chkvisimap && !isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, &aotid))
+	{
+		if (slot != NULL)
+			ExecClearTuple(slot);
+		
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+	/* rowNumInBlock = rowNum - blockFirstRowNum */
+	datumstreamread_find(ds, rownum - ds->blockFirstRowNum);
+
+	values = slot->tts_values;
+	nulls = slot->tts_isnull;
+
+	datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
+
+out:
+	/* update rows scanned */
+	ds->blockRowsProcessed += rowstoscan;
+
+	return ret;
 }
 
 bool
@@ -632,13 +1028,10 @@ aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot)
 
 	Assert(ScanDirectionIsForward(direction));
 
-	if (scan->columnScanInfo.relationTupleDesc == NULL)
-	{
-		scan->columnScanInfo.relationTupleDesc = slot->tts_tupleDescriptor;
-		/* Pin it! ... and of course release it upon destruction / rescan */
-		PinTupleDesc(scan->columnScanInfo.relationTupleDesc);
-		initscan_with_colinfo(scan);
-	}
+	/* should not be in ANALYZE */
+	Assert((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) == 0);
+
+	aocs_initscan(scan, slot->tts_tupleDescriptor);
 
 	natts = slot->tts_tupleDescriptor->natts;
 	Assert(natts <= scan->columnScanInfo.relationTupleDesc->natts);
@@ -659,7 +1052,7 @@ ReadNext:
 				scan->cur_seg = -1;
 				return false;
 			}
-			scan->cur_seg_row = 0;
+			scan->cur_seg_rows_scanned = 0;
 		}
 
 		Assert(scan->cur_seg >= 0);
@@ -707,10 +1100,10 @@ ReadNext:
 			}
 		}
 
-		scan->cur_seg_row++;
+		scan->cur_seg_rows_scanned++;
 		if (rowNum == INT64CONST(-1))
 		{
-			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->cur_seg_row);
+			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->cur_seg_rows_scanned);
 		}
 		else
 		{
@@ -719,13 +1112,7 @@ ReadNext:
 
 		if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, &aoTupleId))
 		{
-			/*
-			 * The tuple is invisible.
-			 * In `analyze`, we can simply return false
-			 */
-			if ((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) != 0)
-				return false;
-
+			/* The tuple is invisible */
 			rowNum = INT64CONST(-1);
 			goto ReadNext;
 		}

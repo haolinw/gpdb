@@ -95,6 +95,8 @@ typedef struct MinipagePerColumnGroup
 #define IsMinipageFull(minipagePerColumnGroup) \
 	((minipagePerColumnGroup)->numMinipageEntries == (uint32) gp_blockdirectory_minipage_size)
 
+#define InvalidEntryNum (-1)
+
 /*
  * Define a structure for the append-only relation block directory.
  */
@@ -135,6 +137,11 @@ typedef struct AppendOnlyBlockDirectory
 	ScanKey scanKeys;
 	StrategyNumber *strategyNumbers;
 
+	/*
+	 * Minipage entry number, for caching purpose.
+	 */
+	int cached_mpentry_num;
+
 }	AppendOnlyBlockDirectory;
 
 
@@ -174,10 +181,15 @@ typedef struct AOFetchSegmentFile
 	int64 logicalEof;
 } AOFetchSegmentFile;
 
-typedef struct AppendOnlyBlockDirectorySeqScan {
-	AppendOnlyBlockDirectory blkdir;
-	SysScanDesc sysScan;
-} AppendOnlyBlockDirectorySeqScan;
+typedef struct AOBlkDirScanData
+{
+	AppendOnlyBlockDirectory	*blkdir;
+    MinipagePerColumnGroup		*mpinfo;
+	SysScanDesc					sysscan;
+	int							segno;
+	int							colgroup;
+	int							mpentryi;
+} AOBlkDirScanData, *AOBlkDirScan;
 
 extern void AppendOnlyBlockDirectoryEntry_GetBeginRange(
 	AppendOnlyBlockDirectoryEntry	*directoryEntry,
@@ -195,6 +207,12 @@ extern bool AppendOnlyBlockDirectory_GetEntry(
 	AOTupleId 						*aoTupleId,
 	int                             columnGroupNo,
 	AppendOnlyBlockDirectoryEntry	*directoryEntry);
+extern int64 AppendOnlyBlockDirectory_GetRowNum(
+	AOBlkDirScan					blkdirscan,
+	int								targsegno,
+	int								colgroup,
+	int64							targrow,
+	int64							*startrow);
 extern bool AppendOnlyBlockDirectory_CoversTuple(
 	AppendOnlyBlockDirectory		*blockDirectory,
 	AOTupleId 						*aoTupleId);
@@ -216,6 +234,9 @@ extern void AppendOnlyBlockDirectory_Init_forSearch(
 	int numColumnGroups,
 	bool isAOCol,
 	bool *proj);
+extern void AppendOnlyBlockDirectory_Init_forSearch_InSequence(
+	AOBlkDirScan blkdirscan,
+	AppendOnlyBlockDirectory *blkdir);
 extern void AppendOnlyBlockDirectory_Init_forUniqueChecks(AppendOnlyBlockDirectory *blockDirectory,
 														  Relation aoRel,
 														  int numColumnGroups,
@@ -243,6 +264,8 @@ extern void AppendOnlyBlockDirectory_End_forInsert(
 	AppendOnlyBlockDirectory *blockDirectory);
 extern void AppendOnlyBlockDirectory_End_forSearch(
 	AppendOnlyBlockDirectory *blockDirectory);
+extern void AppendOnlyBlockDirectory_End_forSearch_InSequence(
+	AOBlkDirScan seqscan);
 extern void AppendOnlyBlockDirectory_End_addCol(
 	AppendOnlyBlockDirectory *blockDirectory);
 extern void AppendOnlyBlockDirectory_DeleteSegmentFile(
