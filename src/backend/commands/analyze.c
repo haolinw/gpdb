@@ -1364,121 +1364,62 @@ gp_acquire_sample_rows_wrapper(Relation onerel, int elevel,
 
 static int
 ao_acquire_sample_rows(Relation onerel, int elevel,
-					HeapTuple *rows, int targrows,
-					double *totalrows, double *totaldeadrows)
+					   HeapTuple *rows, int targrows,
+					   double *totalrows, double *totaldeadrows)
 {
-	int			numrows = 0;	/* # rows now in reservoir */
-	double		samplerows = 0; /* total # rows collected */
-	double		liverows = 0;	/* # live rows seen */
-	double		deadrows = 0;	/* # dead rows seen */
-	double		rowstoskip = -1;	/* -1 means not set yet */
-	BlockNumber totalblocks;
+	int			numrows = 0;		/* # rows now in reservoir */
+	double		liverows = 0;		/* # live rows seen */
+	double		deadrows = 0;		/* # dead rows seen */
 	TransactionId OldestXmin;
-	BlockSamplerData bs;
-	ReservoirStateData rstate;
+	ObjectSamplerData os;
 	TupleTableSlot *slot;
 	TableScanDesc scan;
 
 	Assert(targrows > 0);
 
 	BlockNumber pages;
-	double		blocks;
-	double		tuples;
+	double		totaltuples;
 	double		allvisfrac;
 	int32		attr_widths;
 
-	table_relation_estimate_size(onerel,	&attr_widths, &pages,
-								&tuples, &allvisfrac);
-
-	blocks = (tuples + (gp_appendonly_analyze_block_size - 1)) / gp_appendonly_analyze_block_size;
-	if (blocks > APPENDONLY_ANALYZE_BLOCK_MAX)
-	{
-		blocks = APPENDONLY_ANALYZE_BLOCK_MAX;
-	}
-
-	totalblocks = (BlockNumber) blocks;
+	/*
+	 * GPDB: Analyze does make a lot of assumptions regarding the file layout of a
+	 * relation. These assumptions are heap specific and do not hold for AO/AOCO
+	 * relations. In the case of AO/AOCO, what is actually needed and used instead
+	 * of number of blocks, is number of tuples.
+	 *
+	 * GPDB_12_MERGE_FIXME: BlockNumber is uint32 and Number of tuples is uint64.
+	 * That means that after row number UINT_MAX we will never analyze the table.
+	 */
+	table_relation_estimate_size(onerel, &attr_widths, &pages,
+								 &totaltuples, &allvisfrac);
 
 	/* Need a cutoff xmin for HeapTupleSatisfiesVacuum */
 	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);
 
-	/* Prepare for sampling block numbers */
-	BlockSampler_Init(&bs, totalblocks, targrows, random());
-	/* Prepare for sampling rows */
-	reservoir_init_selection_state(&rstate, targrows);
+	/* Prepare for sampling tuple numbers */
+	ObjectSampler_Init(&os, totaltuples, targrows, random());
 
 	scan = table_beginscan_analyze(onerel);
 	slot = table_slot_create(onerel, NULL);
 
-	/* Outer loop over blocks to sample */
-	while (BlockSampler_HasMore(&bs))
+	while (ObjectSampler_HasMore(&os))
 	{
-		BlockNumber targblock = BlockSampler_Next(&bs);
+		int64 next_targrow = ObjectSampler_Next(&os);
 
 		vacuum_delay_point();
 
-		if (!table_scan_analyze_next_block(scan, targblock, vac_strategy))
-			continue;
-
-		while (table_scan_analyze_next_tuple(scan, OldestXmin, &liverows, &deadrows, slot))
-		{
-			/*
-			 * The first targrows sample rows are simply copied into the
-			 * reservoir. Then we start replacing tuples in the sample until
-			 * we reach the end of the relation.  This algorithm is from Jeff
-			 * Vitter's paper (see full citation in utils/misc/sampling.c). It
-			 * works by repeatedly computing the number of tuples to skip
-			 * before selecting a tuple, which replaces a randomly chosen
-			 * element of the reservoir (current set of tuples).  At all times
-			 * the reservoir is a true random sample of the tuples we've
-			 * passed over so far, so when we fall off the end of the relation
-			 * we're done.
-			 */
-			if (numrows < targrows)
-				rows[numrows++] = ExecCopySlotHeapTuple(slot);
-			else
-			{
-				/*
-				 * t in Vitter's paper is the number of records already
-				 * processed.  If we need to compute a new S value, we must
-				 * use the not-yet-incremented value of samplerows as t.
-				 */
-				if (rowstoskip < 0)
-					rowstoskip = reservoir_get_next_S(&rstate, samplerows, targrows);
-
-				if (rowstoskip <= 0)
-				{
-					/*
-					 * Found a suitable tuple, so save it, replacing one old
-					 * tuple at random
-					 */
-					int			k = (int) (targrows * sampler_random_fract(rstate.randstate));
-
-					Assert(k >= 0 && k < targrows);
-					heap_freetuple(rows[k]);
-					rows[k] = ExecCopySlotHeapTuple(slot);
-				}
-
-				rowstoskip -= 1;
-			}
-
-			samplerows += 1;
-		}
+		if (table_scan_analyze_next_tuple(scan, OldestXmin, &liverows, &deadrows, slot))
+			rows[numrows++] = ExecCopySlotHeapTuple(slot);
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
 	table_endscan(scan);
 
-	/*
-	 * Estimate total numbers of live and dead rows in relation, extrapolating
-	 * on the assumption that the average tuple density in logical blocks we didn't
-	 * scan is the same as in the logcial blocks we did scan.  Since what we scanned is
-	 * a random sample of the logical blocks in the relation, this should be a good
-	 * assumption.
-	 */
-	if (bs.m > 0)
+	if (os.m > 0)
 	{
-		*totalrows = floor((liverows / bs.m) * totalblocks + 0.5);
-		*totaldeadrows = floor((deadrows / bs.m) * totalblocks + 0.5);
+		*totalrows = totaltuples;
+		*totaldeadrows = gp_aovisimap_hidden_info();
 	}
 	else
 	{
