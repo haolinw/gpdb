@@ -42,6 +42,23 @@ extern BlockNumber BlockSampler_Init(BlockSampler bs, BlockNumber nblocks,
 extern bool BlockSampler_HasMore(BlockSampler bs);
 extern BlockNumber BlockSampler_Next(BlockSampler bs);
 
+/* 64 bit version of BlockSampler */
+typedef struct
+{
+	int64           N;				/* number of objects, known in advance */
+	int64			n;				/* desired sample size */
+	int64           t;				/* current object number */
+	int64			m;				/* objects selected so far */
+	SamplerRandomState randstate;	/* random generator state */
+} ObjectSamplerData;
+
+typedef ObjectSamplerData *ObjectSampler;
+
+extern void ObjectSampler_Init(ObjectSampler os, int64 nobjects,
+							   int64 samplesize, long randseed);
+extern bool ObjectSampler_HasMore(ObjectSampler os);
+extern int64 ObjectSampler_Next(ObjectSampler os);
+
 /* Reservoir sampling methods */
 
 typedef struct
