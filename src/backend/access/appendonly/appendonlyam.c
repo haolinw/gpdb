@@ -1536,6 +1536,15 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	scan->aos_total_segfiles = segfile_count;
 
+	if ((flags & SO_TYPE_ANALYZE) != 0)
+	{
+		for (int i = 0; i < segfile_count; i++)
+		{
+			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+				scan->totalrows += seginfo[i]->total_tupcount;
+		}
+	}
+
 	/*
 	 * we do this here instead of in initscan() because appendonly_rescan also
 	 * calls initscan() and we don't want to allocate memory again
@@ -1635,7 +1644,7 @@ appendonly_beginscan(Relation relation,
 	 */
 	seginfo = GetAllFileSegInfo(relation,
 								appendOnlyMetaDataSnapshot, &segfile_count, NULL);
-
+	
 	aoscan = appendonly_beginrangescan_internal(relation,
 												snapshot,
 												appendOnlyMetaDataSnapshot,

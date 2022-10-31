@@ -1377,35 +1377,28 @@ ao_acquire_sample_rows(Relation onerel, int elevel,
 
 	Assert(targrows > 0);
 
-	BlockNumber pages;
-	double		totaltuples;
-	double		allvisfrac;
-	int32		attr_widths;
-
-	/*
-	 * GPDB: Analyze does make a lot of assumptions regarding the file layout of a
-	 * relation. These assumptions are heap specific and do not hold for AO/AOCO
-	 * relations. In the case of AO/AOCO, what is actually needed and used instead
-	 * of number of blocks, is number of tuples.
-	 *
-	 * GPDB_12_MERGE_FIXME: BlockNumber is uint32 and Number of tuples is uint64.
-	 * That means that after row number UINT_MAX we will never analyze the table.
-	 */
-	table_relation_estimate_size(onerel, &attr_widths, &pages,
-								 &totaltuples, &allvisfrac);
-
 	/* Need a cutoff xmin for HeapTupleSatisfiesVacuum */
 	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);
-
-	/* Prepare for sampling tuple numbers */
-	ObjectSampler_Init(&os, totaltuples, targrows, random());
 
 	scan = table_beginscan_analyze(onerel);
 	slot = table_slot_create(onerel, NULL);
 
+	if ((RelationIsAoRows(onerel)))
+		*totalrows = (double)((AppendOnlyScanDesc)scan)->totalrows;
+	else
+		*totalrows = (double)((AOCSScanDesc)scan)->totalrows;
+
+	/* Prepare for sampling tuple numbers */
+	ObjectSampler_Init(&os, *totalrows, targrows, random());
+
 	while (ObjectSampler_HasMore(&os))
 	{
-		int64 next_targrow = ObjectSampler_Next(&os);
+		int64 nexttargrow = ObjectSampler_Next(&os);
+
+		if ((RelationIsAoRows(onerel)))
+			((AppendOnlyScanDesc)scan)->samplerow = nexttargrow;
+		else
+			((AOCSScanDesc)scan)->samplerow = nexttargrow;
 
 		vacuum_delay_point();
 
@@ -1417,10 +1410,7 @@ ao_acquire_sample_rows(Relation onerel, int elevel,
 	table_endscan(scan);
 
 	if (os.m > 0)
-	{
-		*totalrows = totaltuples;
 		*totaldeadrows = gp_aovisimap_hidden_info();
-	}
 	else
 	{
 		*totalrows = 0.0;
@@ -1431,12 +1421,11 @@ ao_acquire_sample_rows(Relation onerel, int elevel,
 	 * Emit some interesting relation info
 	 */
 	ereport(elevel,
-			(errmsg("\"%s\": scanned %d of %u logical blocks, "
+			(errmsg("\"%s\": scanned %d rows, "
 					"containing %.0f live rows and %.0f dead rows; "
 					"%d rows in sample, %.0f estimated total rows",
 					RelationGetRelationName(onerel),
-					bs.m, totalblocks,
-					liverows, deadrows,
+					bs.m, liverows, deadrows,
 					numrows, *totalrows)));
 
 	return numrows;

@@ -166,7 +166,11 @@ ObjectSampler_Next(ObjectSampler os)
      * Refer to BlockSampler_Next() for detail.
      */
 	V = sampler_random_fract(os->randstate);
-    /* Don't bother overflow of conversion from int64 ? */
+    /*
+	 * Don't bother overflow of conversion from int64 K as it is not
+	 * greater than the total number of tuples in "double" retrieved
+	 * from table_relation_estimate_size().
+	 */
 	p = 1.0 - (double) k / (double) K;
 	while (V < p)
 	{

@@ -1385,7 +1385,7 @@ aoco_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
                                    BufferAccessStrategy bstrategy)
 {
 	AOCSScanDesc aoscan = (AOCSScanDesc) scan;
-	aoscan->targetTupleId = blockno;
+	aoscan->samplerow = blockno;
 
 	return true;
 }
@@ -1399,16 +1399,16 @@ aoco_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 	bool		ret = false;
 
 	/* skip several tuples if they are not sampling target */
-	while (aoscan->targetTupleId > aoscan->nextTupleId)
+	while (aoscan->samplerow > aoscan->nextrow)
 	{
 		aoco_getnextslot(scan, ForwardScanDirection, slot);
-		aoscan->nextTupleId++;
+		aoscan->nextrow++;
 	}
 
-	if (aoscan->targetTupleId == aoscan->nextTupleId)
+	if (aoscan->samplerow == aoscan->nextrow)
 	{
 		ret = aoco_getnextslot(scan, ForwardScanDirection, slot);
-		aoscan->nextTupleId++;
+		aoscan->nextrow++;
 
 		if (ret)
 			*liverows += 1;

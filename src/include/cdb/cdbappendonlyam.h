@@ -230,8 +230,9 @@ typedef struct AppendOnlyScanDescData
 	/*
 	 * Only used by `analyze`
 	 */
-	int64		nextTupleId;
-	int64		targetTupleId;
+	int64		nextrow;
+	int64		samplerow;
+	int64		totalrows;
 
 	/* For Bitmap scan */
 	int			rs_cindex;		/* current tuple's index in tbmres->offsets */
