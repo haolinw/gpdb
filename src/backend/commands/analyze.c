@@ -176,12 +176,21 @@ static void compute_index_stats(Relation onerel, double totalrows,
 								MemoryContext col_context);
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
 									   Node *index_expr, int elevel);
+static int acquire_sample_rows(Relation onerel, int elevel,
+							   HeapTuple *rows, int targrows,
+							   double *totalrows, double *totaldeadrows);
 static int acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 										  HeapTuple *rows, int targrows,
 										  double *totalrows, double *totaldeadrows);
+static int gp_acquire_sample_rows_func(Relation onerel, int elevel,
+									   HeapTuple *rows, int targrows,
+									   double *totalrows, double *totaldeadrows);
 static BlockNumber acquire_index_number_of_blocks(Relation indexrel, Relation tablerel);
 
 static int	compare_rows(const void *a, const void *b);
+static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
+										  HeapTuple *rows, int targrows,
+										  double *totalrows, double *totaldeadrows);
 static void update_attstats(Oid relid, bool inh,
 							int natts, VacAttrStats **vacattrstats);
 static Datum std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
@@ -339,7 +348,7 @@ analyze_rel_internal(Oid relid, RangeVar *relation,
 		onerel->rd_rel->relkind == RELKIND_MATVIEW)
 	{
 		/* Regular table, so we'll use the regular row acquisition function */
-		acquirefunc = gp_acquire_sample_rows_wrapper;
+		acquirefunc = gp_acquire_sample_rows_func;
 
 		/* Also get regular table's size */
 		relpages = AcquireNumberOfBlocks(onerel);
@@ -1341,7 +1350,7 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr, int elevel)
  * collect the statistics from them.
  */
 int
-gp_acquire_sample_rows_wrapper(Relation onerel, int elevel,
+gp_acquire_sample_rows_func(Relation onerel, int elevel,
 							   HeapTuple *rows, int targrows,
 							   double *totalrows, double *totaldeadrows)
 {
@@ -1354,81 +1363,12 @@ gp_acquire_sample_rows_wrapper(Relation onerel, int elevel,
 											  totalrows, totaldeadrows);
 	}
 
-    if (RelationIsAppendOptimized(onerel))
-        return ao_acquire_sample_rows(onerel, elevel, rows, 
-									  targrows, totalrows, totaldeadrows);
+    if (gp_appendonly_enable_fast_analyze && RelationIsAppendOptimized(onerel))
+        return table_relation_acquire_sample_rows(onerel, elevel, rows, 
+									  	 		  targrows, totalrows, totaldeadrows);
     
     return acquire_sample_rows(onerel, elevel, rows,
 							   targrows, totalrows, totaldeadrows);
-}
-
-static int
-ao_acquire_sample_rows(Relation onerel, int elevel,
-					   HeapTuple *rows, int targrows,
-					   double *totalrows, double *totaldeadrows)
-{
-	int			numrows = 0;		/* # rows now in reservoir */
-	double		liverows = 0;		/* # live rows seen */
-	double		deadrows = 0;		/* # dead rows seen */
-	TransactionId OldestXmin;
-	ObjectSamplerData os;
-	TupleTableSlot *slot;
-	TableScanDesc scan;
-
-	Assert(targrows > 0);
-
-	/* Need a cutoff xmin for HeapTupleSatisfiesVacuum */
-	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);
-
-	scan = table_beginscan_analyze(onerel);
-	slot = table_slot_create(onerel, NULL);
-
-	if ((RelationIsAoRows(onerel)))
-		*totalrows = (double)((AppendOnlyScanDesc)scan)->totalrows;
-	else
-		*totalrows = (double)((AOCSScanDesc)scan)->totalrows;
-
-	/* Prepare for sampling tuple numbers */
-	ObjectSampler_Init(&os, *totalrows, targrows, random());
-
-	while (ObjectSampler_HasMore(&os))
-	{
-		int64 nexttargrow = ObjectSampler_Next(&os);
-
-		if ((RelationIsAoRows(onerel)))
-			((AppendOnlyScanDesc)scan)->samplerow = nexttargrow;
-		else
-			((AOCSScanDesc)scan)->samplerow = nexttargrow;
-
-		vacuum_delay_point();
-
-		if (table_scan_analyze_next_tuple(scan, OldestXmin, &liverows, &deadrows, slot))
-			rows[numrows++] = ExecCopySlotHeapTuple(slot);
-	}
-
-	ExecDropSingleTupleTableSlot(slot);
-	table_endscan(scan);
-
-	if (os.m > 0)
-		*totaldeadrows = gp_aovisimap_hidden_info();
-	else
-	{
-		*totalrows = 0.0;
-		*totaldeadrows = 0.0;
-	}
-
-	/*
-	 * Emit some interesting relation info
-	 */
-	ereport(elevel,
-			(errmsg("\"%s\": scanned %d rows, "
-					"containing %.0f live rows and %.0f dead rows; "
-					"%d rows in sample, %.0f estimated total rows",
-					RelationGetRelationName(onerel),
-					bs.m, liverows, deadrows,
-					numrows, *totalrows)));
-
-	return numrows;
 }
 
 /*
@@ -1723,7 +1663,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 			childrel->rd_rel->relkind == RELKIND_MATVIEW)
 		{
 			/* Regular table, so use the regular row acquisition function */
-			acquirefunc = gp_acquire_sample_rows_wrapper;
+			acquirefunc = gp_acquire_sample_rows_func;
 			relpages = AcquireNumberOfBlocks(childrel);
 		}
 		else if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)

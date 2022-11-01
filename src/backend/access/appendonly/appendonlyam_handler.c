@@ -41,6 +41,7 @@
 #include "utils/faultinjector.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_rusage.h"
+#include "utils/sampling.h"
 
 #define IS_BTREE(r) ((r)->rd_rel->relam == BTREE_AM_OID)
 
@@ -1196,9 +1197,8 @@ static bool
 appendonly_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
 							   BufferAccessStrategy bstrategy)
 {
-	// [TODO]
-	// AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
-	// aoscan->samplerow = blockno;
+	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
+	aoscan->tgtrowcnt = blockno;
 
 	return true;
 }
@@ -1211,15 +1211,86 @@ appendonly_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
 	bool		ret = false;
 
-	// [TODO] check if in vaild scope
-
 	/* skip several tuples if they are not sampling target */
-	for (int i = aoscan->nextrow; i < aoscan->samplerow; i++)
-		ret = appendonly_getnextslot(scan, ForwardScanDirection, slot);
+	while (!aoscan->aos_done_all_segfiles
+		   && aoscan->tgtrowcnt > aoscan->currowcnt)
+	{
+		appendonly_getnextslot(scan, ForwardScanDirection, slot);
+		aoscan->currowcnt++;
+	}
 
-	aoscan->nextrow = i;
+	if (!aoscan->aos_done_all_segfiles
+		&& aoscan->tgtrowcnt == aoscan->currowcnt)
+	{
+		ret = appendonly_getnextslot(scan, ForwardScanDirection, slot);
+		aoscan->currowcnt++;
+
+		if (ret)
+			*liverows += 1;
+		else
+			*deadrows += 1; /* if return an invisible tuple */
+	}
 
 	return ret;
+}
+
+static int
+appendonly_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
+							   int targrows, double *totalrows, double *totaldeadrows)
+{
+	int			numrows = 0;		/* # rows now in reservoir */
+	double		liverows = 0;		/* # live rows seen */
+	double		deadrows = 0;		/* # dead rows seen */
+
+	Assert(targrows > 0);
+
+	TableScanDesc scan = table_beginscan_analyze(onerel);
+	TupleTableSlot *slot = table_slot_create(onerel, NULL);
+	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
+	
+	*totalrows = (double) aoscan->totalrows;
+	*totaldeadrows = (double) aoscan->totaldeadrows;
+
+	/* Prepare for sampling tuple numbers */
+	ObjectSamplerData os;
+	ObjectSampler_Init(&os, *totalrows, targrows, random());
+
+	while (ObjectSampler_HasMore(&os))
+	{
+		aoscan->tgtrowcnt = ObjectSampler_Next(&os);
+
+		vacuum_delay_point();
+
+		if (appendonly_get_target_tuple(scan, aoscan->tgtrowcnt, slot))
+		{
+			rows[numrows++] = ExecCopySlotHeapTuple(slot);
+			liverows++;
+		}
+		else
+			deadrows++;
+	}
+
+	ExecDropSingleTupleTableSlot(slot);
+	table_endscan(scan);
+
+	if (os.m <= 0)
+	{
+		*totalrows = 0.0;
+		*totaldeadrows = 0.0;
+	}
+
+	/*
+	 * Emit some interesting relation info
+	 */
+	ereport(elevel,
+			(errmsg("\"%s\": scanned " INT64_FORMAT " rows, "
+					"containing %.0f live rows and %.0f dead rows; "
+					"%d rows in sample, %.0f estimated total rows",
+					RelationGetRelationName(onerel),
+					os.m, liverows, deadrows,
+					numrows, *totalrows)));
+
+	return numrows;
 }
 
 static double
@@ -2094,6 +2165,7 @@ static const TableAmRoutine ao_row_methods = {
 	.relation_vacuum = appendonly_vacuum_rel,
 	.scan_analyze_next_block = appendonly_scan_analyze_next_block,
 	.scan_analyze_next_tuple = appendonly_scan_analyze_next_tuple,
+	.relation_acquire_sample_rows = appendonly_acquire_sample_rows,
 	.index_build_range_scan = appendonly_index_build_range_scan,
 	.index_validate_scan = appendonly_index_validate_scan,
 

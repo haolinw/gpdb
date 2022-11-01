@@ -41,6 +41,7 @@
 #include "utils/faultinjector.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_rusage.h"
+#include "utils/sampling.h"
 
 #define IS_BTREE(r) ((r)->rd_rel->relam == BTREE_AM_OID)
 
@@ -639,6 +640,27 @@ aoco_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSlot *sl
 	}
 
 	return false;
+}
+
+static bool
+aoco_get_target_tuple(TableScanDesc scan, const int64 targrowcount, TupleTableSlot *slot)
+{
+	AOCSScanDesc aoscan = (AOCSScanDesc) scan;
+	bool ret = false;
+
+	aocs_initscan(aoscan, slot->tts_tupleDescriptor);
+
+	if (!aocs_getsegment(aoscan, targrowcount))
+		return false;
+
+	if (!aocs_getblock(aoscan, targrowcount))
+		return false;
+
+	/* skip several tuples if they are not sampling target */
+	for (; aoscan->currowcnt <= targrowcount; aoscan->currowcnt++)
+		ret = aoco_getnextslot(scan, ForwardScanDirection, slot);
+	
+	return ret;
 }
 
 static Size
@@ -1385,7 +1407,7 @@ aoco_scan_analyze_next_block(TableScanDesc scan, BlockNumber blockno,
                                    BufferAccessStrategy bstrategy)
 {
 	AOCSScanDesc aoscan = (AOCSScanDesc) scan;
-	aoscan->samplerow = blockno;
+	aoscan->tgtrowcnt = blockno;
 
 	return true;
 }
@@ -1399,16 +1421,16 @@ aoco_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 	bool		ret = false;
 
 	/* skip several tuples if they are not sampling target */
-	while (aoscan->samplerow > aoscan->nextrow)
+	while (aoscan->tgtrowcnt > aoscan->currowcnt)
 	{
 		aoco_getnextslot(scan, ForwardScanDirection, slot);
-		aoscan->nextrow++;
+		aoscan->currowcnt++;
 	}
 
-	if (aoscan->samplerow == aoscan->nextrow)
+	if (aoscan->tgtrowcnt == aoscan->currowcnt)
 	{
 		ret = aoco_getnextslot(scan, ForwardScanDirection, slot);
-		aoscan->nextrow++;
+		aoscan->currowcnt++;
 
 		if (ret)
 			*liverows += 1;
@@ -1417,6 +1439,65 @@ aoco_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 	}
 
 	return ret;
+}
+
+static int
+aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
+						 int targrows, double *totalrows, double *totaldeadrows)
+{
+	int			numrows = 0;		/* # rows now in reservoir */
+	double		liverows = 0;		/* # live rows seen */
+	double		deadrows = 0;		/* # dead rows seen */
+
+	Assert(targrows > 0);
+
+	TableScanDesc scan = table_beginscan_analyze(onerel);
+	TupleTableSlot *slot = table_slot_create(onerel, NULL);
+	AOCSScanDesc aocoscan = (AOCSScanDesc) scan;
+	
+	*totalrows = (double) aocoscan->totalrows;
+	*totaldeadrows = (double) aocoscan->totaldeadrows;
+
+	/* Prepare for sampling tuple numbers */
+	ObjectSamplerData os;
+	ObjectSampler_Init(&os, *totalrows, targrows, random());
+
+	while (ObjectSampler_HasMore(&os))
+	{
+		aocoscan->tgtrowcnt = ObjectSampler_Next(&os);
+
+		vacuum_delay_point();
+
+		if (aoco_get_target_tuple(scan, ForwardScanDirection, slot))
+		{
+			rows[numrows++] = ExecCopySlotHeapTuple(slot);
+			liverows++;
+		}
+		else
+			deadrows++;
+	}
+
+	ExecDropSingleTupleTableSlot(slot);
+	table_endscan(scan);
+
+	if (os.m <= 0)
+	{
+		*totalrows = 0.0;
+		*totaldeadrows = 0.0;
+	}
+
+	/*
+	 * Emit some interesting relation info
+	 */
+	ereport(elevel,
+			(errmsg("\"%s\": scanned " INT64_FORMAT "rows, "
+					"containing %.0f live rows and %.0f dead rows; "
+					"%d rows in sample, %.0f estimated total rows",
+					RelationGetRelationName(onerel),
+					os.m, liverows, deadrows,
+					numrows, *totalrows)));
+
+	return numrows;
 }
 
 static double
@@ -2090,6 +2171,7 @@ static const TableAmRoutine ao_column_methods = {
 	.relation_vacuum = aoco_vacuum_rel,
 	.scan_analyze_next_block = aoco_scan_analyze_next_block,
 	.scan_analyze_next_tuple = aoco_scan_analyze_next_tuple,
+	.relation_acquire_sample_rows = aoco_acquire_sample_rows,
 	.index_build_range_scan = aoco_index_build_range_scan,
 	.index_validate_scan = aoco_index_validate_scan,
 

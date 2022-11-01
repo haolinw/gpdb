@@ -764,7 +764,7 @@ AppendOnlyExecutorReadBlock_Finish(AppendOnlyExecutorReadBlock *executorReadBloc
 static void
 AppendOnlyExecutorReadBlock_ResetCounts(AppendOnlyExecutorReadBlock *executorReadBlock)
 {
-	executorReadBlock->totalRowsScannned = 0;
+	executorReadBlock->totalRowsScanned = 0;
 }
 
 /*
@@ -1034,7 +1034,7 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 
 				executorReadBlock->currentItemCount++;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->totalRowsScanned++;
 
 				if (itemLen > 0)
 				{
@@ -1087,7 +1087,7 @@ AppendOnlyExecutorReadBlock_ScanNextTuple(AppendOnlyExecutorReadBlock *executorR
 				executorReadBlock->singleRow = NULL;
 				executorReadBlock->singleRowLen = 0;
 
-				executorReadBlock->totalRowsScannned++;
+				executorReadBlock->totalRowsScanned++;
 
 				if (AppendOnlyExecutorReadBlock_ProcessTuple(
 															 executorReadBlock,
@@ -1239,6 +1239,56 @@ getNextBlock(AppendOnlyScanDesc scan)
 	return true;
 }
 
+static bool
+appendonly_getsegment(AppendOnlyScanDesc scan, const int64 targrowcount)
+{
+	int64 rowcount;
+
+	while (scan->aos_need_new_segfile)
+	{
+		if (!SetNextFileSegForRead(scan))
+			return false;
+		
+		rowcount = scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount;
+
+		if (scan->currowcnt + rowcount < targrowcount)
+		{
+			scan->currowcnt += rowcount;
+			scan->aos_need_new_segfile = true;
+			CloseScannedFileSeg(scan);
+			continue;
+		}
+	}
+
+	return true;
+}
+
+static bool
+appendonly_getblock(AppendOnlyScanDesc scan, const int64 targrowcount)
+{
+	AppendOnlyExecutorReadBlock *readblock = &scan->executorReadBlock;
+
+	while(AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
+	{
+		if (scan->currowcnt + readblock->rowCount < targrowcount)
+		{
+			scan->currowcnt += readblock->rowCount;
+			AppendOnlyExecutionReadBlock_FinishedScanBlock(readblock);
+			AppendOnlyStorageRead_SkipCurrentBlock(&scan->storageRead);
+			continue;
+		}
+		else
+		{
+			AppendOnlyExecutorReadBlock_GetContents(readblock);
+			return true;
+		}
+	}
+
+	/* done reading the file */
+	CloseScannedFileSeg(scan);
+	return false;
+}
+
 /* ----------------
  *		appendonlygettup - fetch next appendonly tuple
  *
@@ -1278,8 +1328,16 @@ appendonlygettup(AppendOnlyScanDesc scan,
 			{
 				/* have we read all this relation's data. done! */
 				if (scan->aos_done_all_segfiles)
+				{
+					// if (scan->fast_analyze)
+					// 	Assert(scan->currowcnt == scan->totalrows); // [TODO] should ERROR ?
+
 					return false;
+				}
 			}
+
+			// if (scan->fast_analyze && (scan->currowcnt < scan->tgtrowcnt))
+			// 	continue;
 
 			scan->bufferDone = false;
 		}
@@ -1536,15 +1594,6 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	scan->aos_total_segfiles = segfile_count;
 
-	if ((flags & SO_TYPE_ANALYZE) != 0)
-	{
-		for (int i = 0; i < segfile_count; i++)
-		{
-			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
-				scan->totalrows += seginfo[i]->total_tupcount;
-		}
-	}
-
 	/*
 	 * we do this here instead of in initscan() because appendonly_rescan also
 	 * calls initscan() and we don't want to allocate memory again
@@ -1559,6 +1608,21 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	scan->blockDirectory = NULL;
 
+	if (gp_appendonly_enable_fast_analyze && (flags & SO_TYPE_ANALYZE) != 0)
+	{
+		scan->fast_analyze = true;
+		scan->currowcnt = 0;
+		scan->tgtrowcnt = 0;
+		scan->totalrows = 0;
+		scan->totaldeadrows = 0;
+
+		for (int i = 0; i < segfile_count; i++)
+		{
+			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+				scan->totalrows += seginfo[i]->total_tupcount;
+		}
+	}
+
 	if (segfile_count > 0)
 	{
 		Oid			visimaprelid;
@@ -1572,6 +1636,9 @@ appendonly_beginrangescan_internal(Relation relation,
 							   visimapidxid,
 							   AccessShareLock,
 							   appendOnlyMetaDataSnapshot);
+
+		if (scan->fast_analyze)
+			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 	}
 	return scan;
 }
@@ -1763,6 +1830,25 @@ appendonly_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSl
 
 		return false;
 	}
+}
+
+bool
+appendonly_get_target_tuple(TableScanDesc scan, const int64 targrowcount, TupleTableSlot *slot)
+{
+	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
+	bool ret = false;
+
+	if (!appendonly_getsegment(aoscan, targrowcount))
+		return false;
+
+	if (!appendonly_getblock(aoscan, targrowcount))
+		return false;
+
+	/* skip several tuples if they are not sampling target */
+	for (; aoscan->currowcnt <= targrowcount; aoscan->currowcnt++)
+		ret = appendonly_getnextslot(scan, ForwardScanDirection, slot);
+	
+	return ret;
 }
 
 static void
