@@ -261,7 +261,6 @@ AppendOnlyBlockDirectory_Init_forUniqueChecks(
 
 	/* Segfile setup is not necessary as physical AO tuples will not be accessed */
 	blockDirectory->segmentFileInfo = NULL;
-	blockDirectory->totalSegfiles = -1;
 	blockDirectory->currentSegmentFileNum = -1;
 
 	/* Metadata snapshot assignment is deferred to lookup-time */

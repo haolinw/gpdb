@@ -691,6 +691,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 							  &spc_random_page_cost,
 							  &spc_seq_page_cost);
 
+	/* set allvisfrac properly for indexonlyscan on AO/CO as we enable it */
 	if (baserel_orig->relam == AO_ROW_TABLE_AM_OID||
 		baserel_orig->relam == AO_COLUMN_TABLE_AM_OID)
 		baserel->allvisfrac = 1.0;
