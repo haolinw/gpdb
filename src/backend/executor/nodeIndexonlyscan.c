@@ -124,6 +124,14 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		CHECK_FOR_INTERRUPTS();
 
+		if (RelationAMIsAO(scandesc->xs_heapfetch->rel))
+		{
+			if (!table_index_tid_visible(scandesc->xs_heapfetch,
+										 tid,
+										 scandesc->xs_snapshot,
+										 (void *)&node->ioss_VMBuffer))
+				continue;
+		} /* CAUTION: else if branch is under the comments. */
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
 		 * which all tuples are known visible to everybody.  In any case,
@@ -158,10 +166,9 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!table_index_tid_visible(scandesc->xs_heapfetch,
-									 tid,
-									 scandesc->xs_snapshot,
-									 (void *)&node->ioss_VMBuffer))
+		else if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+								 ItemPointerGetBlockNumber(tid),
+								 &node->ioss_VMBuffer))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.
