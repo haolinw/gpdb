@@ -693,6 +693,9 @@ aoco_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 	aocs_initscan(aoscan, slot->tts_tupleDescriptor);
 
+	if (aoscan->blkdirscan != NULL)
+		return aocs_blkdirscan_get_target_tuple(aoscan, targrow, slot);
+
 	if (!aocs_getsegment(aoscan, targrow))
 	{
 		ExecClearTuple(slot);

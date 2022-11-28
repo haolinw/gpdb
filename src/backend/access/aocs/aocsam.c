@@ -329,7 +329,7 @@ initscan(AOCSScanDesc scan)
 	MemoryContextSwitchTo(oldCtx);
 
 	scan->cur_seg = -1;
-	scan->cur_seg_rowsscanned = 0;
+	scan->cur_seg_rows_scanned = 0;
 
 	ItemPointerSet(&scan->cdb_fake_ctid, 0, 0);
 
@@ -444,6 +444,47 @@ close_cur_scan_seg(AOCSScanDesc scan)
 		AppendOnlyBlockDirectory_End_forInsert(scan->blockDirectory);
 }
 
+static void
+aocs_blkdirscan_init(AOCSScanDesc scan)
+{
+	if (scan->aocsfetch == NULL)
+	{
+		int natts = RelationGetNumberOfAttributes(scan->rs_base.rs_rd);
+		scan->proj = palloc(natts * sizeof(*scan->proj));
+		MemSet(scan->proj, true, natts * sizeof(*scan->proj));
+
+		scan->aocsfetch = aocs_fetch_init(scan->rs_base.rs_rd,
+										  scan->rs_base.rs_snapshot,
+										  scan->appendOnlyMetaDataSnapshot,
+										  scan->proj);
+	}
+
+	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
+	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
+													   &scan->aocsfetch->blockDirectory);
+}
+
+static void
+aocs_blkdirscan_finish(AOCSScanDesc scan)
+{
+	AppendOnlyBlockDirectory_End_forSearch_InSequence(scan->blkdirscan);
+	pfree(scan->blkdirscan);
+	scan->blkdirscan = NULL;
+
+	if (scan->aocsfetch != NULL)
+	{
+		aocs_fetch_finish(scan->aocsfetch);
+		pfree(scan->aocsfetch);
+		scan->aocsfetch = NULL;
+	}
+
+	if (scan->proj != NULL)
+	{
+		pfree(scan->proj);
+		scan->proj = NULL;
+	}
+}
+
 /*
  * aocs_beginrangescan
  *
@@ -525,6 +566,7 @@ aocs_beginscan_internal(Relation relation,
 	AttrNumber		natts;
 	Oid				visimaprelid;
 	Oid				visimapidxid;
+	Oid				blkdirrelid;
 
 	scan = (AOCSScanDesc) palloc0(sizeof(AOCSScanDescData));
 	scan->rs_base.rs_rd = relation;
@@ -588,7 +630,7 @@ aocs_beginscan_internal(Relation relation,
 
 	GetAppendOnlyEntryAuxOids(RelationGetRelid(relation),
 							  scan->appendOnlyMetaDataSnapshot,
-							  NULL, NULL, NULL,
+							  NULL, &blkdirrelid, NULL,
 							  &visimaprelid, &visimapidxid);
 
 	if (scan->total_seg != 0)
@@ -600,7 +642,12 @@ aocs_beginscan_internal(Relation relation,
 							   appendOnlyMetaDataSnapshot);
 
 		if (scan->fast_analyze)
+		{
+			if (OidIsValid(blkdirrelid))
+				aocs_blkdirscan_init(scan);
+
 			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
+		}
 	}
 
 	return scan;
@@ -654,6 +701,9 @@ aocs_endscan(AOCSScanDesc scan)
 
 	if (scan->total_seg != 0)
 		AppendOnlyVisimap_Finish(&scan->visibilityMap, AccessShareLock);
+
+	if (scan->blkdirscan != NULL)
+		aocs_blkdirscan_finish(scan);
 
 	RelationDecrementReferenceCount(scan->rs_base.rs_rd);
 
@@ -734,16 +784,101 @@ static void upgrade_datum_fetch(AOCSFetchDesc fetch, int attno, Datum values[],
 					   values, isnull, formatversion);
 }
 
+static int
+aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow, int *segidx)
+{
+	int64 rowcount;
+
+	for (int i = scan->cur_seg; i < scan->total_seg; i++)
+	{
+		if (i < 0)
+			continue;
+
+		rowcount = scan->seginfo[i]->total_tupcount;
+		if (rowcount <= 0)
+			continue;
+
+		if (scan->nextrow + rowcount - 1 >= targrow)
+		{
+			/* found the target segment */
+			if (segidx != NULL)
+				*segidx = i;
+
+			return scan->seginfo[i]->segno;
+		}
+
+		scan->nextrow += rowcount;
+		/* continue next segment */
+	}
+
+	return -1;
+}
+
+bool
+aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	int segno;
+	int64 rownum = -1;
+	AOTupleId aotid;
+	int ncols = scan->columnScanInfo.relationTupleDesc->natts;
+
+	Assert(scan->blkdirscan != NULL);
+
+	/* locate the target segment */
+	segno = aocs_locate_target_segment(scan, targrow, NULL);
+	if (segno < 0)
+		return false;
+
+	/* locate the target row by seqscan block directory */
+	for (int col = 0; col < ncols; col++)
+	{
+		/* reset the startrow for every column */
+		int64 startrow = scan->nextrow;
+
+		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
+			continue;
+
+		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
+													segno,
+													col,
+													targrow,
+													&startrow);
+		if (rownum < 0)
+			continue;
+
+		/* finally, set the nextrow to the proper position */
+		scan->nextrow = startrow;
+		break;
+	}
+
+	if (rownum < 0)
+		return false;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	ExecClearTuple(slot);
+	/* fetch the target tuple */
+	if(!aocs_fetch(scan->aocsfetch, &aotid, slot))
+		return false;
+
+	/* OK to return this tuple */
+	ExecStoreVirtualTuple(slot);
+	pgstat_count_heap_fetch(scan->rs_base.rs_rd);
+
+	return true;
+}
+
 static inline int64
 aocs_getsegment_remaining_rows(AOCSScanDesc scan)
 {
-	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->cur_seg_rowsscanned);
+	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->cur_seg_rows_scanned);
 }
 
 bool
 aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 {
-	int segno;
+	int segno, segidx;
 	int64 rowcount;
 
 	if (scan->cur_seg >= 0)
@@ -761,32 +896,27 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 		close_cur_scan_seg(scan);
 	}
 
-	for (segno = scan->cur_seg; segno < scan->total_seg; segno++)
+	/* locate the target segment */
+	segno = aocs_locate_target_segment(scan, targrow, &segidx);
+	if (segno >= 0)
 	{
-		if (segno < 0)
-			segno = 0;
-
-		rowcount = scan->seginfo[segno]->total_tupcount;
-		if (rowcount <= 0)
-			continue;
-
-		if (scan->nextrow + rowcount - 1 >= targrow)
+		/* adjust cur_seg to fit for open_next_scan_seg() */
+		scan->cur_seg = segidx - 1;
+		if (open_next_scan_seg(scan) >= 0)
 		{
-			/* found the target segment */
-			if (open_next_scan_seg(scan) >= 0)
-			{
-				/* new segment, reset cur_seg_rowsscanned */
-				scan->cur_seg_rowsscanned = 0;
-				return true;
-			}			
+			/* new segment, reset cur_seg_rows_scanned */
+			scan->cur_seg_rows_scanned = 0;
+			return true;
 		}
 
-		scan->nextrow += rowcount;
-		close_cur_scan_seg(scan);
-		/* continue next segment */
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
+				 		segno, RelationGetRelationName(scan->rs_base.rs_rd))));
 	}
 
 	/* done reading all segments */
+	close_cur_scan_seg(scan);
 	scan->cur_seg = -1;
 	return false;
 }
@@ -831,10 +961,10 @@ aocs_getblock(AOCSScanDesc scan, int64 targrow)
 		while (true)
 		{
 			elog(DEBUG1, "aocs_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
-				 "nextrow: %ld, rowcount: %ld, cur_seg_rowsscanned: %ld, nth: %d, "
+				 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, nth: %d, "
 				 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
 				 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
-				 scan->cur_seg_rowsscanned, datumstreamread_nth(ds), ds->blockRowCount);
+				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount);
 
 			if (datumstreamread_block_info(ds))
 			{
@@ -900,7 +1030,7 @@ ReadNext:
 				scan->cur_seg = -1;
 				return false;
 			}
-			scan->cur_seg_rowsscanned = 0;
+			scan->cur_seg_rows_scanned = 0;
 		}
 
 		Assert(scan->cur_seg >= 0);
@@ -957,10 +1087,10 @@ ReadNext:
 			}
 		}
 
-		scan->cur_seg_rowsscanned++;
+		scan->cur_seg_rows_scanned++;
 		if (rowNum == INT64CONST(-1))
 		{
-			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->cur_seg_rowsscanned);
+			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->cur_seg_rows_scanned);
 		}
 		else
 		{

@@ -231,12 +231,13 @@ typedef struct AppendOnlyScanDescData
 	/*
 	 * Only used by `fast analyze`
 	 */
-	bool		fast_analyze;
-	int64		cur_seg_rowsscanned;
-	int64		nextrow;
-	int64		targrow;
-	int64		totalrows;
-	int64		totaldeadrows;
+	bool				fast_analyze;
+	int64				cur_seg_rows_scanned;
+	int64				nextrow;
+	int64				targrow;
+	int64				totalrows;
+	int64				totaldeadrows;
+	AOBlkDirScan		blkdirscan;
 
 	/* For Bitmap scan */
 	int			rs_cindex;		/* current tuple's index in tbmres->offsets */
