@@ -96,6 +96,7 @@ typedef struct FileSegInfo
 	 * state of the segno. The state is only maintained on the segments.
 	 */
 	FileSegInfoState state;
+
 } FileSegInfo;
 
 /*
