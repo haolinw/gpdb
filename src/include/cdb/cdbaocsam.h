@@ -236,6 +236,9 @@ typedef struct AOCSFetchDescData
 	AppendOnlyVisimap visibilityMap;
 
 	Oid segrelid;
+
+	/* Assuming only one formatversion for all segfiles. */
+	int16 formatversion;
 } AOCSFetchDescData;
 
 typedef AOCSFetchDescData *AOCSFetchDesc;

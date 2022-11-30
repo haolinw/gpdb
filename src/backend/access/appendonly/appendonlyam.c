@@ -2003,6 +2003,13 @@ appendonly_fetch_init(Relation relation,
 		segno = (i < 0 ? 0 : aoFetchDesc->segmentFileInfo[i]->segno);
 		/* set corresponding bit for target segment */
 		aoFetchDesc->lastSequence[segno] = ReadLastSequence(aoFormData.segrelid, segno);
+
+		/*
+		 * Initialize formatversion for IndexOnlyScan in case.
+		 * Check index_tid_visible() for detail information.
+		 */
+		if (i >= 0 && !AORelationVersion_IsValid(aoFetchDesc->formatversion))
+			aoFetchDesc->formatversion = aoFetchDesc->segmentFileInfo[i]->formatversion;
 	}
 
 	AppendOnlyStorageRead_Init(
