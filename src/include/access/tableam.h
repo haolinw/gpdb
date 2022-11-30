@@ -1091,6 +1091,15 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 													all_dead);
 }
 
+/*
+ * GPDB: Visibility check for the tuple pointed by the given tid.
+ * This is used for Index Only Scan on AO/CO tables, keeping Heap
+ * tables code as is.
+ * 
+ * Besides checking the return value, to determine whether needs to
+ * fetch tuple from AO/CO table physical data files is also needed
+ * to check the content of the output parameter "extra".
+ */
 static inline bool
 table_index_tid_visible(struct IndexFetchTableData *scan,
 						ItemPointer tid,
