@@ -259,3 +259,39 @@ index, and hence there are no uniqueness checks triggered (see
 ExecInsertIndexTuples()). Also during partial unique index builds, keys that
 don't satisfy the partial index predicate are never inserted into the index
 (see *_index_build_range_scan()).
+
+# Index only scan
+
+Index scan has been disabled on append-optimized tables is mainly because index
+fetch tuples in random I/O pattern is not friendly to append-optimized varblock
+lookups. Not only it depends on additional auxiliary tables (such as AO block
+directory, visibility map) lookups in random order, it also needs to extract the
+tuple from uncompressed target varblock, which could yield to extremely poor
+performance in a typical case that the fetching tuples sparsely distributed in
+different varblocks.
+
+Index only scan could save cycles from no access of append-optimized varblocks,
+but only randomly reads auxiliary Heap tables. Hence it is more performant than
+index scan. Based on this theory, we enable index only scan on append-optimized
+tables to serve satisfied queries that no need to fetch tuples from physical
+append-optimized data files.
+
+Index only scan functionality is based on the target tuple visibility check.
+In past (before removing aoblkdir hole filling mechanism [1]), pg_aoseg/pg_aocsseg
+stored EOF (or checking physical file for tuple presence) was the only source to
+perform transaction visibility checks for append-optimized tables (block directory
+was only used for optimization).
+
+With the change made by removing aoblkdir hole filling mechanism to align block
+directory reflect the reality of block information on-disk, now the design is:
+
+- for non-indexed append-optimized tables EOF acts as source (along with visimap)
+- for indexed append-optimized tables blockdirectory acts as source (along with visimap)
+
+The commit of removing aoblkdir hole filling mechanism changed the format version to
+AORelationVersion_PG12, so only tables with this format version should enable index-only
+scan using the above logic. Tables in-place upgraded from GPDB6 to GPDB7 with old block
+directory format will fall back to index fetch tuple logic to determine tuple visibility
+if the tuple tid fall into a hole of block directory.
+
+[1] https://github.com/greenplum-db/gpdb/commit/258ec966b26929430fc5dc9f6e6fe09854644302
