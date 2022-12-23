@@ -844,18 +844,10 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 		
 		scan->blkdirscan->colgroup = col;
 
-		scan->blkdirscan->sysscan = systable_beginscan(scan->blkdirscan->blkdirrel,
-										  InvalidOid,
-										  false,
-										  scan->appendOnlyMetaDataSnapshot,
-										  0,
-										  NULL);
 		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
 													segno,
 													targrow,
 													&startrow);
-		systable_endscan(scan->blkdirscan->sysscan);
-
 		if (rownum < 0)
 			continue;
 

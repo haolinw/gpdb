@@ -227,17 +227,6 @@ AppendOnlyBlockDirectory_Init_forSearch_InSequence(AOBlkDirScan seqscan,
 												   Oid blkdirrelid,
 												   Snapshot snapshot)
 {
-	Assert(OidIsValid(blkdirrelid));
-
-	seqscan->blkdirrel = table_open(blkdirrelid, AccessShareLock);
-
-    // seqscan->sysscan = systable_beginscan(seqscan->blkdirrel,
-	// 									  InvalidOid,
-	// 									  false,
-	// 									  snapshot,
-	// 									  0,
-	// 									  NULL);
-
     seqscan->mpinfo.minipage = palloc0(minipage_size(NUM_MINIPAGE_ENTRIES));
 	seqscan->blkdir = blkdir;
 	seqscan->colgroup = 0;
@@ -1557,10 +1546,6 @@ AppendOnlyBlockDirectory_End_forSearch(
 void
 AppendOnlyBlockDirectory_End_forSearch_InSequence(AOBlkDirScan seqscan)
 {
-	table_close(seqscan->blkdirrel, AccessShareLock);
-	seqscan->blkdirrel = NULL;
-	// systable_endscan(seqscan->sysscan);
-	seqscan->sysscan = NULL;
 	seqscan->blkdir = NULL;
 	seqscan->colgroup = 0;
 	pfree(seqscan->mpinfo.minipage);
@@ -1649,15 +1634,33 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan, int targsegno, int64
 	int colgroup = blkdirscan->colgroup;
 
 	Assert(targsegno >= 0);
-	Assert(RelationIsValid(blkdirscan->blkdirrel));
-	Assert(blkdirscan->sysscan != NULL);
 	Assert(blkdir != NULL);
 
-	while(HeapTupleIsValid(tuple = systable_getnext(blkdirscan->sysscan)))
+	ScanKeyData	scankeys[2];
+
+	ScanKeyInit(&scankeys[0],
+				1,				/* segno */
+				BTEqualStrategyNumber,
+				F_INT4EQ,
+				Int32GetDatum(targsegno));
+	
+	ScanKeyInit(&scankeys[1],
+				2,				/* colgroup */
+				BTEqualStrategyNumber,
+				F_INT4EQ,
+				Int32GetDatum(colgroup));
+	
+	SysScanDesc iscan = systable_beginscan_ordered(blkdir->blkdirRel,
+												   blkdir->blkdirIdx,
+												   blkdir->appendOnlyMetaDataSnapshot,
+												   2, /* nkeys */
+												   scankeys);
+
+	while(HeapTupleIsValid(tuple = systable_getnext_ordered(iscan, ForwardScanDirection)))
 	{
 		bool isnull;
 
-		tupdesc = RelationGetDescr(blkdirscan->blkdirrel);
+		tupdesc = RelationGetDescr(blkdirscan->blkdir->blkdirRel);
 		int segno = DatumGetInt32(fastgetattr(tuple, Anum_pg_aoblkdir_segno, tupdesc, &isnull));
 		if (segno != targsegno)
 			continue;
@@ -1678,12 +1681,15 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan, int targsegno, int64
 			if (*startrow + entry->rowCount - 1 >= targrow)
 			{
 				rownum = entry->firstRowNum + (targrow - *startrow);
-				return rownum;
+				goto out;
 			}
 
 			*startrow += entry->rowCount;
 		}
 	}
+
+out:
+	systable_endscan_ordered(iscan);
 
 	return rownum;
 }

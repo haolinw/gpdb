@@ -176,9 +176,7 @@ typedef struct AOFetchSegmentFile
 
 typedef struct AOBlkDirScanData
 {
-	Relation					blkdirrel;
 	AppendOnlyBlockDirectory	*blkdir;
-    SysScanDesc					sysscan;
     MinipagePerColumnGroup		mpinfo;
 	int							colgroup;
 } AOBlkDirScanData, *AOBlkDirScan;
