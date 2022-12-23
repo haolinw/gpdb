@@ -836,17 +836,31 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	/* locate the target row by seqscan block directory */
 	for (int col = 0; col < ncols; col++)
 	{
+		/* reset the startrow for every column */
+		int64 startrow = scan->nextrow;
+
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
 		
 		scan->blkdirscan->colgroup = col;
+
+		scan->blkdirscan->sysscan = systable_beginscan(scan->blkdirscan->blkdirrel,
+										  InvalidOid,
+										  false,
+										  scan->appendOnlyMetaDataSnapshot,
+										  0,
+										  NULL);
 		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
 													segno,
 													targrow,
-													&scan->nextrow);
+													&startrow);
+		systable_endscan(scan->blkdirscan->sysscan);
+
 		if (rownum < 0)
 			continue;
-		
+
+		/* finally, set the nextrow to the proper position */
+		scan->nextrow = startrow;
 		break;
 	}
 

@@ -231,12 +231,12 @@ AppendOnlyBlockDirectory_Init_forSearch_InSequence(AOBlkDirScan seqscan,
 
 	seqscan->blkdirrel = table_open(blkdirrelid, AccessShareLock);
 
-    seqscan->sysscan = systable_beginscan(seqscan->blkdirrel,
-										  InvalidOid,
-										  false,
-										  snapshot,
-										  0,
-										  NULL);
+    // seqscan->sysscan = systable_beginscan(seqscan->blkdirrel,
+	// 									  InvalidOid,
+	// 									  false,
+	// 									  snapshot,
+	// 									  0,
+	// 									  NULL);
 
     seqscan->mpinfo.minipage = palloc0(minipage_size(NUM_MINIPAGE_ENTRIES));
 	seqscan->blkdir = blkdir;
@@ -1559,7 +1559,7 @@ AppendOnlyBlockDirectory_End_forSearch_InSequence(AOBlkDirScan seqscan)
 {
 	table_close(seqscan->blkdirrel, AccessShareLock);
 	seqscan->blkdirrel = NULL;
-	systable_endscan(seqscan->sysscan);
+	// systable_endscan(seqscan->sysscan);
 	seqscan->sysscan = NULL;
 	seqscan->blkdir = NULL;
 	seqscan->colgroup = 0;
