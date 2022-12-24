@@ -447,7 +447,7 @@ close_cur_scan_seg(AOCSScanDesc scan)
 }
 
 static void
-aocs_blkdirscan_init(AOCSScanDesc scan, Oid blkdirrelid)
+aocs_blkdirscan_init(AOCSScanDesc scan)
 {
 	if (scan->aocsfetch == NULL)
 	{
@@ -463,9 +463,7 @@ aocs_blkdirscan_init(AOCSScanDesc scan, Oid blkdirrelid)
 
 	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
 	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
-													   &scan->aocsfetch->blockDirectory,
-													   blkdirrelid,
-													   scan->appendOnlyMetaDataSnapshot);
+													   &scan->aocsfetch->blockDirectory);
 }
 
 static void
@@ -648,7 +646,7 @@ aocs_beginscan_internal(Relation relation,
 		if (scan->fast_analyze)
 		{
 			if (OidIsValid(blkdirrelid))
-				aocs_blkdirscan_init(scan, blkdirrelid);
+				aocs_blkdirscan_init(scan);
 
 			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
@@ -841,11 +839,10 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
-		
-		scan->blkdirscan->colgroup = col;
 
 		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
 													segno,
+													col,
 													targrow,
 													&startrow);
 		if (rownum < 0)

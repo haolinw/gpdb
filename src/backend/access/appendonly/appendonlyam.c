@@ -1564,7 +1564,7 @@ finishWriteBlock(AppendOnlyInsertDesc aoInsertDesc)
 }
 
 static void
-appendonly_blkdirscan_init(AppendOnlyScanDesc scan, Oid blkdirrelid)
+appendonly_blkdirscan_init(AppendOnlyScanDesc scan)
 {
 	if (scan->aofetch == NULL)
 		scan->aofetch = appendonly_fetch_init(scan->aos_rd,
@@ -1573,9 +1573,7 @@ appendonly_blkdirscan_init(AppendOnlyScanDesc scan, Oid blkdirrelid)
 
 	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
 	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
-													   &scan->aofetch->blockDirectory,
-													   blkdirrelid,
-													   scan->appendOnlyMetaDataSnapshot);
+													   &scan->aofetch->blockDirectory);
 }
 
 static void
@@ -1751,7 +1749,7 @@ appendonly_beginrangescan_internal(Relation relation,
 		if (scan->fast_analyze)
 		{
 			if (OidIsValid(blkdirrelid))
-				appendonly_blkdirscan_init(scan, blkdirrelid);
+				appendonly_blkdirscan_init(scan);
 
 			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
@@ -1910,15 +1908,16 @@ appendonly_endscan(TableScanDesc scan)
 	if (aoscan->aos_total_segfiles > 0)
 		AppendOnlyVisimap_Finish(&aoscan->visibilityMap, AccessShareLock);
 
+	/* should be called before fetch was destroyed */
+	if (aoscan->blkdirscan != NULL)
+		appendonly_blkdirscan_finish(aoscan);
+
 	if (aoscan->aofetch)
 	{
 		appendonly_fetch_finish(aoscan->aofetch);
 		pfree(aoscan->aofetch);
 		aoscan->aofetch = NULL;
 	}
-
-	if (aoscan->blkdirscan != NULL)
-		appendonly_blkdirscan_finish(aoscan);
 
 	pfree(aoscan->aos_filenamepath);
 
@@ -1966,9 +1965,9 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 		return false;
 
 	/* locate the target row by seqscan block directory */
-	scan->blkdirscan->colgroup = 0;
 	rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
 												segno,
+												0,
 												targrow,
 												&scan->nextrow);
 	if (rownum < 0)
