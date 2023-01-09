@@ -870,7 +870,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 }
 
 static inline int64
-aocs_getsegment_remaining_rows(AOCSScanDesc scan)
+aocs_segment_remaining_rows(AOCSScanDesc scan)
 {
 	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->cur_seg_rows_scanned);
 }
@@ -884,7 +884,7 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 	if (scan->cur_seg >= 0)
 	{
 		/* segment file is opened */
-		rowcount = aocs_getsegment_remaining_rows(scan);
+		rowcount = aocs_segment_remaining_rows(scan);
 		Assert(rowcount >= 0);
 
 		if (scan->nextrow + rowcount - 1 >= targrow)
@@ -922,63 +922,87 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 }
 
 static inline int
-aocs_getblock_remaining_rows(DatumStreamRead *ds)
+aocs_block_remaining_rows(DatumStreamRead *ds)
 {
-	int nth = datumstreamread_nth(ds);
-	if (nth < 0)
-		return ds->blockRowCount;
-
-	return (ds->blockRowCount - 1 - nth);
+	return (ds->blockRowCount - ds->blockRowsScanned);
 }
 
 bool
-aocs_getblock(AOCSScanDesc scan, int64 targrow)
+aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
+	bool ret = true;
 	int64 rowcount = -1;
+	int64 rowstoscan;
 
 	Assert(scan->cur_seg >= 0);
+	Assert(slot != NULL);
+
+	ExecClearTuple(slot);
 
 	/* read from scan->cur_seg */
 	for (AttrNumber i = 0; i < scan->columnScanInfo.num_proj_atts; i++)
 	{
 		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
+		int64 startrow = scan->nextrow;
 
 		if (ds->blockRowCount <= 0)
 			; /* haven't read block */
 		else
 		{
 			/* block was read */
-			rowcount = aocs_getblock_remaining_rows(ds);
+			rowcount = aocs_block_remaining_rows(ds);
 			Assert(rowcount >= 0);
 
-			if (scan->nextrow + rowcount - 1 >= targrow)
-				continue; /* haven't finished scanning on current block */
+			if (startrow + rowcount - 1 >= targrow)
+			{
+				if (!aocs_gettuple_column(scan, attno, startrow, targrow, slot))
+				{
+					ret = false;
+					/* must update tracking vars before return */
+					goto out;
+				}
+
+				/* haven't finished scanning on current block */
+				continue;
+			}
 			else
-				scan->nextrow += rowcount; /* skip scanning remaining rows */
+				startrow += rowcount; /* skip scanning remaining rows */
 		}
 
 		while (true)
 		{
-			elog(DEBUG1, "aocs_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
+			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
 				 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, nth: %d, "
-				 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
-				 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
-				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount);
+				 "blockRowCount: %d, blockRowsScanned: %d]", targrow, startrow + rowcount - 1,
+				 startrow+ rowcount - 1 - targrow, startrow, rowcount,
+				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount,
+				 ds->blockRowsScanned);
 
 			if (datumstreamread_block_info(ds))
 			{
 				rowcount = ds->blockRowCount;
 				Assert(rowcount > 0);
 
-				if (scan->nextrow + rowcount - 1 >= targrow)
+				/* new block, reset blockRowsScanned */
+				ds->blockRowsScanned = 0;
+
+				if (startrow + rowcount - 1 >= targrow)
 				{
 					/* read a new buffer to consume */
 					datumstreamread_block_content(ds);
+
+					if (!aocs_gettuple_column(scan, attno, startrow, targrow, slot))
+					{
+						ret = false;
+						/* must update tracking vars before return */
+						goto out;
+					}
+
 					break;
 				}
 
-				scan->nextrow += rowcount;
+				startrow += rowcount;
 				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
 				/* continue next block */
 			}
@@ -990,7 +1014,76 @@ aocs_getblock(AOCSScanDesc scan, int64 targrow)
 		}
 	}
 
-	return true;
+out:
+	/* update rows scanned */
+	rowstoscan = targrow - scan->nextrow + 1;
+	scan->cur_seg_rows_scanned += rowstoscan;
+	/* update nextrow position */
+	scan->nextrow = targrow + 1;
+
+	if (ret)
+	{
+		ExecStoreVirtualTuple(slot);
+		pgstat_count_heap_getnext(scan->rs_base.rs_rd);
+	}
+
+	return ret;
+}
+
+bool
+aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, TupleTableSlot *slot)
+{
+	bool isSnapshotAny = (scan->rs_base.rs_snapshot == SnapshotAny);
+	DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
+	int segno = scan->seginfo[scan->cur_seg]->segno;
+	AOTupleId aotid;
+	bool ret = true;
+
+	if (ds->blockFirstRowNum <= 0)
+		elog(ERROR, "AOCO varblock->blockFirstRowNum should be greater than zero.");
+
+	Assert(segno >= 0);
+	Assert(startrow <= endrow);
+
+	int64 rowstoscan = endrow - startrow + 1;
+	/* nrows = blockRowsScanned + rowstoscan */
+	int64 nrows = ds->blockRowsScanned + rowstoscan;
+	/* rowNum = blockFirstRowNum + nrows - 1 */
+	int64 rownum = ds->blockFirstRowNum + nrows - 1;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, &aotid))
+	{
+		if (slot != NULL)
+			ExecClearTuple(slot);
+		
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+	/* rowNumInBlock = rowNum - blockFirstRowNum */
+	datumstreamread_find(ds, rownum - ds->blockFirstRowNum);
+
+	Datum *values = slot->tts_values;
+	bool *nulls = slot->tts_isnull;
+	int formatversion = ds->ao_read.formatVersion;
+
+	datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
+
+	/*
+	 * Perform any required upgrades on the Datum we just fetched.
+	 */
+	if (formatversion < AORelationVersion_GetLatest())
+		upgrade_datum_scan(scan, attno, values, nulls, formatversion);
+
+out:
+	/* update rows scanned */
+	ds->blockRowsScanned += rowstoscan;
+
+	return ret;
 }
 
 bool

@@ -430,7 +430,7 @@ extern bool appendonly_getnextslot(TableScanDesc scan,
 								   ScanDirection direction,
 								   TupleTableSlot *slot);
 extern bool appendonly_get_target_tuple(TableScanDesc scan,
-										const int64 targrow,
+										int64 targrow,
 										TupleTableSlot *slot);
 extern AppendOnlyFetchDesc appendonly_fetch_init(
 	Relation 	relation,

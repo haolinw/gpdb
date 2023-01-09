@@ -1243,17 +1243,18 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow, int *se
 }
 
 static inline int64
-appendonly_getsegment_remaining_rows(AppendOnlyScanDesc scan)
+appendonly_segment_remaining_rows(AppendOnlyScanDesc scan)
 {
 	Assert(scan->aos_segfiles_processed > 0);
 	return (scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount - scan->cur_seg_rows_scanned);
 }
 
-static bool
+static int
 appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 {
 	int64 rowcount;
-	int segno, segidx;
+	int segno = -1;
+	int segidx;
 
 	/* haven't opened any segment file */
 	if (scan->aos_segfiles_processed <= 0)
@@ -1261,7 +1262,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 	else
 	{
 		/* segment file is opened */
-		rowcount = appendonly_getsegment_remaining_rows(scan);
+		rowcount = appendonly_segment_remaining_rows(scan);
 		Assert(rowcount >= 0);
 
 		if (scan->nextrow + rowcount - 1 >= targrow)
@@ -1273,10 +1274,14 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 			scan->nextrow += rowcount;
 			CloseScannedFileSeg(scan);
 		}
+
+		/* get current segno */
+		segno = scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->segno;
 	}
 
 	if (!scan->aos_need_new_segfile)
-		return true;
+		/* return current segno */
+		return segno;
 
 	/* locate the target segment */
 	segno = appendonly_locate_target_segment(scan, targrow, &segidx);
@@ -1288,7 +1293,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 		{
 			/* new segment, reset cur_seg_rows_scanned */
 			scan->cur_seg_rows_scanned = 0;
-			return true;
+			return segno;
 		}
 
 		ereport(ERROR,
@@ -1302,11 +1307,11 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 	/* done reading all segments */
 	Assert(scan->aos_done_all_segfiles);
 
-	return false;
+	return -1;
 }
 
 static inline int64
-appendonly_getblock_remaining_rows(AppendOnlyScanDesc scan)
+appendonly_block_remaining_rows(AppendOnlyScanDesc scan)
 {
 	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsScanned);
 }
@@ -1323,7 +1328,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 	else
 	{
 		/* block was read */
-		rowcount = appendonly_getblock_remaining_rows(scan);
+		rowcount = appendonly_block_remaining_rows(scan);
 		Assert(rowcount >= 0);
 
 		if (scan->nextrow + rowcount - 1 >= targrow)
@@ -1351,7 +1356,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 
 		/* new block, reset blockRowsScanned */
 		scan->executorReadBlock.blockRowsScanned = 0;
-		rowcount = appendonly_getblock_remaining_rows(scan);
+		rowcount = appendonly_block_remaining_rows(scan);
 		Assert(rowcount > 0);
 		if (scan->nextrow + rowcount - 1 >= targrow)
 		{
@@ -1367,11 +1372,112 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 		/* continue next block */
 	}
 
-	elog(ERROR, "Unexpected result was returned when getting AO block info.");
-
 	/* done reading the file */
 	CloseScannedFileSeg(scan);
+
+	elog(ERROR, "Unexpected result was returned when getting AO block info.");
+
 	return false;
+}
+
+static bool
+appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	int segno;
+	int64 rownum;
+	AOTupleId aotid;
+
+	Assert(scan->blkdirscan != NULL);
+
+	/* locate the target segment */
+	segno = appendonly_locate_target_segment(scan, targrow, NULL);
+	if (segno < 0)
+		return false;
+
+	/* locate the target row by seqscan block directory */
+	rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
+												segno,
+												0,
+												targrow,
+												&scan->nextrow);
+	if (rownum < 0)
+		return false;
+
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	/* fetch the target tuple */
+	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
+		return false;
+
+	/* OK to return this tuple */
+	pgstat_count_heap_fetch(scan->aos_rd);
+
+	return true;
+}
+
+bool
+appendonly_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
+{
+	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
+	AppendOnlyExecutorReadBlock *varblock = &aoscan->executorReadBlock;
+	bool ret = true;
+
+	if (aoscan->blkdirscan != NULL)
+		return appendonly_blkdirscan_get_target_tuple(aoscan, targrow, slot);
+
+	int segno = appendonly_getsegment(aoscan, targrow);
+	if (segno < 0)
+		return false;
+
+	if (!appendonly_getblock(aoscan, targrow))
+		return false;
+
+	int64 rowstoscan = targrow - aoscan->nextrow + 1;
+	/* nrows = blockRowsScanned + rowstoscan */
+	int64 nrows = aoscan->executorReadBlock.blockRowsScanned + rowstoscan;
+	/* rowNum = blockFirstRowNum + nrows - 1 */
+	int64 rownum = varblock->blockFirstRowNum + nrows - 1;
+
+	AOTupleId aotid;
+	/* form the target tuple TID */
+	AOTupleIdInit(&aotid, segno, rownum);
+
+	bool isSnapshotAny = (aoscan->snapshot == SnapshotAny);
+	if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&aoscan->visibilityMap, &aotid))
+	{
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+	/* fetch the target tuple */
+	if (!AppendOnlyExecutorReadBlock_FetchTuple(varblock, rownum, 0, NULL, slot))
+	{
+		ret = false;
+		/* must update tracking vars before return */
+		goto out;
+	}
+
+out:
+	/* update rows scanned */
+	aoscan->cur_seg_rows_scanned += rowstoscan;
+	aoscan->executorReadBlock.blockRowsScanned += rowstoscan;
+	/* update nextrow position */
+	aoscan->nextrow = targrow + 1;
+
+	if (ret)
+	{
+		/* OK to return this tuple */
+		pgstat_count_heap_fetch(aoscan->aos_rd);
+	}
+	else
+	{
+		if (slot != NULL)
+			ExecClearTuple(slot);
+	}
+
+	return ret;
 }
 
 /* ----------------
@@ -1956,70 +2062,6 @@ appendonly_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSl
 
 		return false;
 	}
-}
-
-static bool
-appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
-{
-	int segno;
-	int64 rownum;
-	AOTupleId aotid;
-
-	Assert(scan->blkdirscan != NULL);
-
-	/* locate the target segment */
-	segno = appendonly_locate_target_segment(scan, targrow, NULL);
-	if (segno < 0)
-		return false;
-
-	/* locate the target row by seqscan block directory */
-	rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
-												segno,
-												0,
-												targrow,
-												&scan->nextrow);
-	if (rownum < 0)
-		return false;
-
-	/* form the target tuple TID */
-	AOTupleIdInit(&aotid, segno, rownum);
-
-	/* fetch the target tuple */
-	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
-		return false;
-
-	/* OK to return this tuple */
-	pgstat_count_heap_fetch(scan->aos_rd);
-
-	return true;
-}
-
-bool
-appendonly_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
-{
-	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
-	bool ret = false;
-
-	if (aoscan->blkdirscan != NULL)
-		return appendonly_blkdirscan_get_target_tuple(aoscan, targrow, slot);
-
-	if (!appendonly_getsegment(aoscan, targrow))
-		return false;
-
-	if (!appendonly_getblock(aoscan, targrow))
-		return false;
-
-	int64 rowsscanned = aoscan->nextrow;
-	/* scan till to the target row */
-	for (; aoscan->nextrow <= targrow; aoscan->nextrow++)
-		ret = appendonly_getnextslot(scan, ForwardScanDirection, slot);
-	
-	rowsscanned = aoscan->nextrow - rowsscanned;
-
-	aoscan->cur_seg_rows_scanned += rowsscanned;
-	aoscan->executorReadBlock.blockRowsScanned += rowsscanned;
-
-	return ret;
 }
 
 static void

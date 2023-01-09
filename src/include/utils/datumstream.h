@@ -93,6 +93,7 @@ typedef struct DatumStreamRead
 	int64		blockFirstRowNum;
 	int64		blockFileOffset;
 	int			blockRowCount;
+	int			blockRowsScanned;
 
 	AppendOnlyStorageRead ao_read;
 

@@ -689,7 +689,6 @@ static bool
 aoco_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
 	AOCSScanDesc aoscan = (AOCSScanDesc) scan;
-	bool ret = false;
 
 	aocs_initscan(aoscan, slot->tts_tupleDescriptor);
 
@@ -698,18 +697,20 @@ aoco_get_target_tuple(TableScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 	if (!aocs_getsegment(aoscan, targrow))
 	{
+		/* all done */
 		ExecClearTuple(slot);
 		return false;
 	}
 
-	if (!aocs_getblock(aoscan, targrow))
+	/*
+	 * Unlike AO_ROW, AO_COLUMN may have different varblocks
+	 * for different columns, so we get per-column tuple directly
+	 * on the way of walking per-column varblock.
+	 */
+	if (!aocs_gettuple(aoscan, targrow, slot))
 		return false;
-
-	/* scan till to the target row */
-	for (; aoscan->nextrow <= targrow; aoscan->nextrow++)
-		ret = aoco_getnextslot(scan, ForwardScanDirection, slot);
 	
-	return ret;
+	return true;
 }
 
 static Size
