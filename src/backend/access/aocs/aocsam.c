@@ -933,6 +933,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	bool ret = true;
 	int64 rowcount = -1;
 	int64 rowstoscan;
+	bool chkvisimap = true;
 
 	Assert(scan->cur_seg >= 0);
 	Assert(slot != NULL);
@@ -956,13 +957,14 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 			if (startrow + rowcount - 1 >= targrow)
 			{
-				if (!aocs_gettuple_column(scan, attno, startrow, targrow, slot))
+				if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
 				{
 					ret = false;
 					/* must update tracking vars before return */
 					goto out;
 				}
 
+				chkvisimap = false;
 				/* haven't finished scanning on current block */
 				continue;
 			}
@@ -992,13 +994,15 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 					/* read a new buffer to consume */
 					datumstreamread_block_content(ds);
 
-					if (!aocs_gettuple_column(scan, attno, startrow, targrow, slot))
+					if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
 					{
 						ret = false;
 						/* must update tracking vars before return */
 						goto out;
 					}
 
+					chkvisimap = false;
+					/* done this column */
 					break;
 				}
 
@@ -1031,7 +1035,7 @@ out:
 }
 
 bool
-aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, TupleTableSlot *slot)
+aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, bool chkvisimap, TupleTableSlot *slot)
 {
 	bool isSnapshotAny = (scan->rs_base.rs_snapshot == SnapshotAny);
 	DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
@@ -1054,7 +1058,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
 
-	if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, &aotid))
+	if (chkvisimap && !isSnapshotAny && !AppendOnlyVisimap_IsVisible(&scan->visibilityMap, &aotid))
 	{
 		if (slot != NULL)
 			ExecClearTuple(slot);

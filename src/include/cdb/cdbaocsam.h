@@ -347,7 +347,8 @@ extern void aocs_endscan(AOCSScanDesc scan);
 extern void aocs_initscan(AOCSScanDesc scan, TupleDesc tupdesc);
 extern bool aocs_getsegment(AOCSScanDesc scan, int64 targrow);
 extern bool aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot);
-extern bool aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, TupleTableSlot *slot);
+extern bool aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow,
+								 int64 endrow, bool chkvisimap, TupleTableSlot *slot);
 extern bool aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot);
 
 extern AOCSInsertDesc aocs_insert_init(Relation rel, int segno, int64 num_rows);
