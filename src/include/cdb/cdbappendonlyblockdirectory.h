@@ -195,7 +195,7 @@ extern bool AppendOnlyBlockDirectory_GetEntry(
 	AOTupleId 						*aoTupleId,
 	int                             columnGroupNo,
 	AppendOnlyBlockDirectoryEntry	*directoryEntry);
-extern bool AppendOnlyBlockDirectory_CoversTuple(
+extern bool AppendOnlyBlockDirectory_Unique_Check(
 	AppendOnlyBlockDirectory		*blockDirectory,
 	AOTupleId 						*aoTupleId);
 extern void AppendOnlyBlockDirectory_Init_forInsert(
@@ -280,7 +280,7 @@ static inline bool AppendOnlyBlockDirectory_UniqueCheck(
 	/* Set up the snapshot to use for the block directory scan */
 	blockDirectory->appendOnlyMetaDataSnapshot = appendOnlyMetaDataSnapshot;
 
-	covers = AppendOnlyBlockDirectory_CoversTuple(blockDirectory,
+	covers = AppendOnlyBlockDirectory_Unique_Check(blockDirectory,
 												  aoTupleId);
 
 	/*

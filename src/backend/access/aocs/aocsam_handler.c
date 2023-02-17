@@ -352,7 +352,7 @@ get_or_create_aoco_insert_descriptor(const Relation relation, int64 num_rows)
 		 * Note: For AOCO tables, we need to only insert a placeholder block
 		 * directory row for the 1st non-dropped column. This is because
 		 * during a uniqueness check, only the first non-dropped column's block
-		 * directory entry is consulted. (See AppendOnlyBlockDirectory_CoversTuple())
+		 * directory entry is consulted. (See AppendOnlyBlockDirectory_Unique_Check())
 		 */
 		if (relationHasUniqueIndex(relation))
 		{

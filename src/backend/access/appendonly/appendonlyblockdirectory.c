@@ -738,7 +738,7 @@ AppendOnlyBlockDirectory_GetEntry(
 }
 
 /*
- * AppendOnlyBlockDirectory_CoversTuple
+ * AppendOnlyBlockDirectory_Unique_Check
  *
  * Check if there exists a visible block directory entry that represents a range
  * in which this tid resides.
@@ -764,7 +764,7 @@ AppendOnlyBlockDirectory_GetEntry(
  * one day, and we want our code to be future-proof)
  */
 bool
-AppendOnlyBlockDirectory_CoversTuple(
+AppendOnlyBlockDirectory_Unique_Check(
 									 AppendOnlyBlockDirectory *blockDirectory,
 									 AOTupleId *aoTupleId)
 {
@@ -1392,7 +1392,7 @@ clear_minipage(MinipagePerColumnGroup *minipagePerColumnGroup)
  *
  * We perform uniqueness checks by looking up block directory rows that cover
  * the rowNum indicated by the aotid obtained from the index. See
- * AppendOnlyBlockDirectory_CoversTuple() for details.
+ * AppendOnlyBlockDirectory_Unique_Check() for details.
  *
  * However, there are multiple time windows in which there are no covering block
  * directory entries in the table for already inserted data rows. Such time
