@@ -717,7 +717,7 @@ appendonly_index_tid_visible(struct IndexFetchTableData *scan,
 									  appendOnlyMetaDataSnapshot);
 
 		/* old format, need to fetch tuple to determine the visibility */
-		*(bool *)extra = (aoscan->aofetch->formatversion < AORelationVersion_PG12);
+		*(bool *)extra = (aoscan->aofetch->minformatversion < AORelationVersion_PG12);
 	}
 
 	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
