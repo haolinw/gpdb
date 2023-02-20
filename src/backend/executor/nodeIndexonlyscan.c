@@ -134,6 +134,14 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			{
 				if (!need_fetch_tuple)
 					continue;
+				else
+					ereport(WARNING,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								errmsg("IndexOnlyScan is falling back to IndexScan on Append-Optimized table %s.",
+									RelationGetRelationName(scandesc->xs_heapfetch->rel)),
+								errdetail("segfiles containing formatversion is less than minimum version required %d",
+									AORelationVersion_PG12),
+								errhint("truncate and reload the table data to resume IndexOnlyScan")));
 			}
 		} /* CAUTION: else branch is under the comments. */
 		/*

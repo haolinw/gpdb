@@ -238,8 +238,8 @@ typedef struct AOCSFetchDescData
 
 	Oid segrelid;
 
-	/* Assuming only one formatversion for all segfiles. */
-	int16 formatversion;
+	/* minimum formatversion of all segfiles. */
+	int16 minformatversion;
 } AOCSFetchDescData;
 
 typedef AOCSFetchDescData *AOCSFetchDesc;

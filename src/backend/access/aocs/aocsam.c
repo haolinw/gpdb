@@ -1279,11 +1279,13 @@ aocs_fetch_init(Relation relation,
 		aocsFetchDesc->lastSequence[segno] = ReadLastSequence(aocsFetchDesc->segrelid, segno);
 
 		/*
-		 * Initialize formatversion for IndexOnlyScan in case.
+		 * Initialize minformatversion for IndexOnlyScan in case.
 		 * Check index_tid_visible() for detail information.
 		 */
-		if (i >= 0 && !AORelationVersion_IsValid(aocsFetchDesc->formatversion))
-			aocsFetchDesc->formatversion = aocsFetchDesc->segmentFileInfo[i]->formatversion;
+		if (i >= 0 &&
+			(!AORelationVersion_IsValid(aocsFetchDesc->minformatversion) || 
+			aocsFetchDesc->minformatversion > aocsFetchDesc->segmentFileInfo[i]->formatversion))
+			aocsFetchDesc->minformatversion = aocsFetchDesc->segmentFileInfo[i]->formatversion;
 	}
 
 	AppendOnlyBlockDirectory_Init_forSearch(
