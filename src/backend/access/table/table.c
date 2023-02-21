@@ -222,21 +222,23 @@ CdbTryOpenTable(Oid relid, LOCKMODE reqmode, bool *lockUpgraded)
 		{
 			lockmode = RowExclusiveLock;
 			rel = try_table_open(relid, lockmode, false);
-			if (RelationIsAppendOptimized(rel))
-			{
-				/*
-				 * AO|AOCO table does not support concurrently
-				 * update or delete on segments, so we first close
-				 * the relation and reopen it using upgraded lockmode.
-				 * NOTE: during this time window, there is a race that
-				 * the table with relid is dropped, and will lead to
-				 * returning NULL. This will not cause any problem
-				 * because it is caller's duty to check NULL pointer.
-				 */
-				table_close(rel, RowExclusiveLock);
-				lockmode = ExclusiveLock;
-				rel = try_table_open(relid, lockmode, false);
-			}
+			
+			// [TODO]
+			// if (RelationIsAppendOptimized(rel))
+			// {
+			// 	/*
+			// 	 * AO|AOCO table does not support concurrently
+			// 	 * update or delete on segments, so we first close
+			// 	 * the relation and reopen it using upgraded lockmode.
+			// 	 * NOTE: during this time window, there is a race that
+			// 	 * the table with relid is dropped, and will lead to
+			// 	 * returning NULL. This will not cause any problem
+			// 	 * because it is caller's duty to check NULL pointer.
+			// 	 */
+			// 	table_close(rel, RowExclusiveLock);
+			// 	lockmode = ExclusiveLock;
+			// 	rel = try_table_open(relid, lockmode, false);
+			// }
 		}
 	}
 	else
