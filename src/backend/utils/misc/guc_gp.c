@@ -2801,7 +2801,7 @@ struct config_bool ConfigureNamesBool_gp[] =
 			NULL
 		},
 		&gp_enable_global_deadlock_detector,
-		false, NULL, NULL
+		true, NULL, NULL
     },
 
 	{
