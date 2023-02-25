@@ -11,6 +11,7 @@ The `pg_appendonly` table contains information about the storage options and oth
 |`blkdiridxid`|oid| |Block used for on-disk column-oriented index file.|
 |`visimaprelid`|oid| |Visibility map for the table.|
 |`visimapidxid`|oid| |B-tree index on the visibility map.|
+|`version`|smallint| |AO relation version.|
 
 > **Note** <sup>1</sup>QuickLZ compression is available only in the commercial release of VMware Greenplum.
 

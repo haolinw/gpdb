@@ -32,6 +32,7 @@ CATALOG(pg_appendonly,6105,AppendOnlyRelationId)
     Oid             blkdiridxid;        /* if aoblkdir table, OID of aoblkdir index */
 	Oid             visimaprelid;		/* OID of the aovisimap table */
 	Oid             visimapidxid;		/* OID of aovisimap index */
+	int16			version;			/* AO relation version */
 } FormData_pg_appendonly;
 
 /* GPDB added foreign key definitions for gpcheckcat. */
@@ -42,7 +43,7 @@ FOREIGN_KEY(relid REFERENCES pg_class(oid));
  * (there are no var-length fields currentl.)
 */
 #define APPENDONLY_TUPLE_SIZE \
-	 (offsetof(FormData_pg_appendonly,visimapidxid) + sizeof(Oid))
+	 (offsetof(FormData_pg_appendonly,version) + sizeof(Oid))
 
 /* ----------------
 *		Form_pg_appendonly corresponds to a pointer to a tuple with
@@ -101,7 +102,8 @@ InsertAppendOnlyEntry(Oid relid,
 					  Oid blkdirrelid,
 					  Oid blkdiridxid,
 					  Oid visimaprelid,
-					  Oid visimapidxid);
+					  Oid visimapidxid,
+					  int16 version);
 
 void
 GetAppendOnlyEntryAttributes(Oid relid,
