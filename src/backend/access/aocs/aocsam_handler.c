@@ -960,10 +960,10 @@ aocs_index_tid_visible(struct IndexFetchTableData *scan,
 											  snapshot,
 											  appendOnlyMetaDataSnapshot,
 											  aocoscan->proj);
-
-		/* old format, need to fetch tuple to determine the visibility */
-		*(bool *)extra = (aocoscan->aocofetch->minformatversion < AORelationVersion_PG12);
 	}
+
+	/* old format, need to fetch tuple to determine the visibility */
+	*(bool *)extra = (aocoscan->aocofetch->minformatversion < AORelationVersion_PG12);
 
 	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
