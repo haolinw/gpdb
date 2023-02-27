@@ -130,6 +130,20 @@ GetAppendOnlyEntryAuxOids(Relation rel,
 
 void
 GetAppendOnlyEntry(Relation rel, Form_pg_appendonly aoEntry);
+
+static inline bool
+IsSupportAOVersion(Relation rel, int16 version)
+{
+	FormData_pg_appendonly aoentry;
+
+	GetAppendOnlyEntry(rel, &aoentry);
+
+	if (aoentry.version < version)
+		return false;
+
+	return true;
+}
+
 /*
  * Update the segrelid and/or blkdirrelid if the input new values
  * are valid OIDs.
