@@ -963,7 +963,7 @@ aocs_index_tid_visible(struct IndexFetchTableData *scan,
 	}
 
 	/* old format, need to fetch tuple to determine the visibility */
-	*(bool *)extra = (aocoscan->aocofetch->minformatversion < AORelationVersion_PG12);
+	*(bool *)extra = (aocoscan->aocofetch->minformatversion < AORelationVersion_GP7);
 
 	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
