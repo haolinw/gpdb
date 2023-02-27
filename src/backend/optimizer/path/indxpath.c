@@ -804,7 +804,7 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		 * the last decompressed block between fetch calls.
 		 * Index scan path on GPDB's bitmap index should works the same as bitmap paths.
 		 *
-		 * Enable index only scan here, but the index scan is still disabled.
+		 * Enable index only scan on AO here, but the index scan is still disabled.
 		 */
 		if (index->amhasgettuple &&
 				((rel->relam != AO_ROW_TABLE_AM_OID &&

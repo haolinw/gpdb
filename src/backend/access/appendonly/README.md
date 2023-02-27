@@ -289,7 +289,7 @@ directory reflect the reality of block information on-disk, now the design is:
 - for indexed append-optimized tables blockdirectory acts as source (along with visimap)
 
 The commit of removing aoblkdir hole filling mechanism changed the format version to
-AORelationVersion_PG12, so only tables with this format version should enable index-only
+AORelationVersion_GP7, so only tables with this format version should enable index-only
 scan using the above logic. Tables in-place upgraded from GPDB6 to GPDB7 with old block
 directory format will fall back to index fetch tuple logic to determine tuple visibility
 if the tuple tid fall into a hole of block directory.

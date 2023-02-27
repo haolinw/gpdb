@@ -190,6 +190,16 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		LOCKMODE	lmode;
 		ListCell   *l;
 
+		/*
+		 * GPDB needs to get AO relation version from pg_appendonly catalog to
+		 * determin whether enabling IndexOnlyScan on AO or not.
+		 * GPDB supports index-only scan on AO starting from AORelationVersion_GP7.
+		 */
+		bool enable_ios_ao = false;
+		if (RelationAMIsAO(relation) &&
+			AORelationVersion_Validate(relation, AORelationVersion_GP7))
+			enable_ios_ao = true;
+
 		indexoidlist = RelationGetIndexList(relation);
 
 		/*
@@ -275,6 +285,10 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			{
 				info->indexkeys[i] = index->indkey.values[i];
 				info->canreturn[i] = index_can_return(indexRelation, i + 1);
+
+				/* GPDB didn't enable index-only scan on this AO relation */
+				if (RelationAMIsAO(relation) && !enable_ios_ao)
+					info->canreturn[i] = false;
 			}
 
 			for (i = 0; i < nkeycolumns; i++)

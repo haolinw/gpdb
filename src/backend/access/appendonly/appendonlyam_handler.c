@@ -691,10 +691,9 @@ appendonly_index_unique_check(Relation rel,
 }
 
 static bool
-appendonly_index_tid_visible(struct IndexFetchTableData *scan,
-							 ItemPointer tid,
-							 Snapshot snapshot,
-							 void *extra)
+appendonly_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
+									 ItemPointer tid,
+									 Snapshot snapshot)
 {
 	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
 	if (!aoscan->aofetch)

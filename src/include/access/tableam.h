@@ -363,9 +363,9 @@ typedef struct TableAmRoutine
 
 	/* See table_index_unique_check() for details */
 	bool		(*index_unique_check) (Relation rel,
-											 ItemPointer tid,
-											 Snapshot snapshot,
-											 bool *all_dead);
+									   ItemPointer tid,
+									   Snapshot snapshot,
+									   bool *all_dead);
 
 	/* ------------------------------------------------------------------------
 	 * Callbacks for non-modifying operations on individual tuples

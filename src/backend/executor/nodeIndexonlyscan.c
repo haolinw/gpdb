@@ -126,12 +126,14 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		if (RelationAMIsAO(scandesc->xs_heapfetch->rel))
 		{
-			if (!table_index_tid_visible(scandesc->xs_heapfetch,
-										 tid,
-										 scandesc->xs_snapshot,
-										 (void *)&node->ioss_VMBuffer))
+			if (!table_index_fetch_tuple_visible(scandesc->xs_heapfetch,
+												 tid,
+												 scandesc->xs_snapshot))
 				continue;
-		} /* CAUTION: else if branch is under the comments. */
+			else
+				; /* visible, jump to filling tuple slot logic */
+
+		} /* CAUTION: else branch is under the comments. */
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
 		 * which all tuples are known visible to everybody.  In any case,
