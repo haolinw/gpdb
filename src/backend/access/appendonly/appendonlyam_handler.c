@@ -693,8 +693,7 @@ appendonly_index_fetch_tuple_exists(Relation rel,
 static bool
 appendonly_index_tid_visible(struct IndexFetchTableData *scan,
 							 ItemPointer tid,
-							 Snapshot snapshot,
-							 void *extra)
+							 Snapshot snapshot)
 {
 	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
 	if (!aoscan->aofetch)
@@ -716,9 +715,6 @@ appendonly_index_tid_visible(struct IndexFetchTableData *scan,
 									  snapshot,
 									  appendOnlyMetaDataSnapshot);
 	}
-
-	/* old format, need to fetch tuple to determine the visibility */
-	*(bool *)extra = (aoscan->aofetch->minformatversion < AORelationVersion_GP7);
 
 	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
 }

@@ -348,8 +348,6 @@ typedef struct AppendOnlyFetchDescData
 
 	AppendOnlyVisimap visibilityMap;
 
-	/* minimum formatversion for all segfiles. */
-	int16 minformatversion;
 }	AppendOnlyFetchDescData;
 
 typedef AppendOnlyFetchDescData *AppendOnlyFetchDesc;

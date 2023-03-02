@@ -121,7 +121,6 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
 	{
 		bool		tuple_from_heap = false;
-		bool		need_fetch_tuple = false;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -129,20 +128,11 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		{
 			if (!table_index_tid_visible(scandesc->xs_heapfetch,
 										 tid,
-										 scandesc->xs_snapshot,
-										 (void *) &need_fetch_tuple))
-			{
-				if (!need_fetch_tuple)
-					continue;
-				else /* unexpected code path */
-					ereport(ERROR,
-							(errcode(ERRCODE_INTERNAL_ERROR),
-								errmsg("Index-only scan should not be enabled on this Append-Optimized table %s.",
-									RelationGetRelationName(scandesc->xs_heapfetch->rel)),
-								errdetail("segfiles containing formatversion is less than minimum version required %d",
-									AORelationVersion_GP7),
-								errhint("ALTER TABLE <table-name> SET WITH (REORGANIZE = true) to resume index-only scan")));
-			}
+										 scandesc->xs_snapshot))
+				continue;
+			else
+				; /* visible, jump to filling tuple slot logic */
+
 		} /* CAUTION: else branch is under the comments. */
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
@@ -178,12 +168,9 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		else
-			need_fetch_tuple = !VM_ALL_VISIBLE(scandesc->heapRelation,
-											   ItemPointerGetBlockNumber(tid),
-											   &node->ioss_VMBuffer);
-
-		if (need_fetch_tuple)
+		else if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+								 ItemPointerGetBlockNumber(tid),
+								 &node->ioss_VMBuffer))
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.

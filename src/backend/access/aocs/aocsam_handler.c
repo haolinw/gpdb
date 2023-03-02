@@ -926,8 +926,7 @@ aoco_index_fetch_tuple_exists(Relation rel,
 static bool
 aocs_index_tid_visible(struct IndexFetchTableData *scan,
 					   ItemPointer tid,
-					   Snapshot snapshot,
-					   void *extra)
+					   Snapshot snapshot)
 {
 	IndexFetchAOCOData *aocoscan = (IndexFetchAOCOData *) scan;
 
@@ -961,9 +960,6 @@ aocs_index_tid_visible(struct IndexFetchTableData *scan,
 											  appendOnlyMetaDataSnapshot,
 											  aocoscan->proj);
 	}
-
-	/* old format, need to fetch tuple to determine the visibility */
-	*(bool *)extra = (aocoscan->aocofetch->minformatversion < AORelationVersion_GP7);
 
 	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
 }
