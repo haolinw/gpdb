@@ -130,18 +130,18 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			if (!table_index_tid_visible(scandesc->xs_heapfetch,
 										 tid,
 										 scandesc->xs_snapshot,
-										 (void *)&need_fetch_tuple))
+										 (void *) &need_fetch_tuple))
 			{
 				if (!need_fetch_tuple)
 					continue;
 				else /* unexpected code path */
 					ereport(ERROR,
 							(errcode(ERRCODE_INTERNAL_ERROR),
-								errmsg("IndexOnlyScan should not be enabled on this Append-Optimized table %s.",
+								errmsg("Index-only scan should not be enabled on this Append-Optimized table %s.",
 									RelationGetRelationName(scandesc->xs_heapfetch->rel)),
 								errdetail("segfiles containing formatversion is less than minimum version required %d",
 									AORelationVersion_GP7),
-								errhint("truncate and reload the table data to resume IndexOnlyScan")));
+								errhint("ALTER TABLE <table-name> SET WITH (REORGANIZE = true) to resume index-only scan")));
 			}
 		} /* CAUTION: else branch is under the comments. */
 		/*
