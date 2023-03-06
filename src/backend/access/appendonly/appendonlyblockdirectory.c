@@ -288,6 +288,64 @@ AppendOnlyBlockDirectory_Init_forUniqueChecks(
 }
 
 /*
+ * AppendOnlyBlockDirectory_Init_forIndexOnlyScan
+ *
+ * Initializes the block directory to handle lookups for index-only scan.
+ *
+ * Note: These lookups will be purely restricted to the block directory relation
+ * itself and will not involve the physical AO relation.
+ * 
+ * Note: the input snapshot should be an MVCC snapshot.
+ */
+void
+AppendOnlyBlockDirectory_Init_forIndexOnlyScan(
+											   AppendOnlyBlockDirectory *blockDirectory,
+											   Relation aoRel,
+											   int numColumnGroups,
+											   Snapshot snapshot)
+{
+	Oid blkdirrelid;
+	Oid blkdiridxid;
+
+	Assert(RelationIsValid(aoRel));
+
+	Assert(IsMVCCSnapshot(snapshot));
+
+	GetAppendOnlyEntryAuxOids(aoRel,
+							  NULL, &blkdirrelid, NULL);
+
+	if (!OidIsValid(blkdirrelid))
+		elog(ERROR, "Could not find block directory for relation: %u", aoRel->rd_id);
+
+	blockDirectory->aoRel = aoRel;
+	blockDirectory->isAOCol = RelationIsAoCols(aoRel);
+
+	/* Segfile setup is not necessary as physical AO tuples will not be accessed */
+	blockDirectory->segmentFileInfo = NULL;
+	blockDirectory->totalSegfiles = -1;
+	blockDirectory->currentSegmentFileNum = -1;
+
+	blockDirectory->appendOnlyMetaDataSnapshot = snapshot;
+
+	blockDirectory->numColumnGroups = numColumnGroups;
+	blockDirectory->proj = NULL;
+
+	blockDirectory->blkdirRel = heap_open(blkdirrelid, AccessShareLock);
+
+	blkdiridxid = AppendonlyGetAuxIndex(blockDirectory->blkdirRel);
+	Assert(OidIsValid(blkdiridxid));
+
+	ereportif(Debug_appendonly_print_blockdirectory, LOG,
+			  (errmsg("Append-only block directory init for index-only scan"),
+			   errdetail("(aoRel = %u, blkdirrel = %u, blkdiridxrel = %u, numColumnGroups = %d)",
+						 aoRel->rd_id, blkdirrelid, blkdiridxid, numColumnGroups)));
+
+	blockDirectory->blkdirIdx = index_open(blkdiridxid, AccessShareLock);
+
+	init_internal(blockDirectory);
+}
+
+/*
  * AppendOnlyBlockDirectory_Init_forInsert
  *
  * Initialize the block directory to handle the inserts.
@@ -1584,15 +1642,32 @@ void
 AppendOnlyBlockDirectory_End_forUniqueChecks(AppendOnlyBlockDirectory *blockDirectory)
 {
 	Assert(RelationIsValid(blockDirectory->blkdirRel));
+	Assert(RelationIsValid(blockDirectory->blkdirIdx));
 
 	/* This must have been reset after each uniqueness check */
 	Assert(blockDirectory->appendOnlyMetaDataSnapshot == InvalidSnapshot);
 
-	Assert(RelationIsValid(blockDirectory->blkdirIdx));
-	Assert(RelationIsValid(blockDirectory->blkdirRel));
-
 	ereportif(Debug_appendonly_print_blockdirectory, LOG,
 			  (errmsg("Append-only block directory end for unique checks"),
+				  errdetail("(aoRel = %u, blkdirrel = %u, blkdiridxrel = %u)",
+							blockDirectory->aoRel->rd_id,
+							blockDirectory->blkdirRel->rd_id,
+							blockDirectory->blkdirIdx->rd_id)));
+
+	index_close(blockDirectory->blkdirIdx, AccessShareLock);
+	heap_close(blockDirectory->blkdirRel, AccessShareLock);
+
+	MemoryContextDelete(blockDirectory->memoryContext);
+}
+
+void
+AppendOnlyBlockDirectory_End_forIndexOnlyScan(AppendOnlyBlockDirectory *blockDirectory)
+{
+	Assert(RelationIsValid(blockDirectory->blkdirRel));
+	Assert(RelationIsValid(blockDirectory->blkdirIdx));
+
+	ereportif(Debug_appendonly_print_blockdirectory, LOG,
+			  (errmsg("Append-only block directory end for index-only scan"),
 				  errdetail("(aoRel = %u, blkdirrel = %u, blkdiridxrel = %u)",
 							blockDirectory->aoRel->rd_id,
 							blockDirectory->blkdirRel->rd_id,

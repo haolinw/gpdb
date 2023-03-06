@@ -528,6 +528,13 @@ appendonly_index_fetch_end(IndexFetchTableData *scan)
 		aoscan->aofetch = NULL;
 	}
 
+	if (aoscan->indexonlydesc)
+	{
+		appendonly_index_only_finish(aoscan->indexonlydesc);
+		pfree(aoscan->indexonlydesc);
+		aoscan->indexonlydesc = NULL;
+	}
+
 	pfree(aoscan);
 }
 
@@ -696,7 +703,8 @@ appendonly_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
 									 Snapshot snapshot)
 {
 	IndexFetchAppendOnlyData *aoscan = (IndexFetchAppendOnlyData *) scan;
-	if (!aoscan->aofetch)
+
+	if (!aoscan->indexonlydesc)
 	{
 		Snapshot	appendOnlyMetaDataSnapshot;
 
@@ -710,13 +718,11 @@ appendonly_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
 			appendOnlyMetaDataSnapshot = GetTransactionSnapshot();
 		}
 
-		aoscan->aofetch =
-				appendonly_fetch_init(aoscan->xs_base.rel,
-									  snapshot,
-									  appendOnlyMetaDataSnapshot);
+		aoscan->indexonlydesc = appendonly_index_only_init(aoscan->xs_base.rel,
+														   appendOnlyMetaDataSnapshot);
 	}
 
-	return appendonly_tuple_visible(aoscan->aofetch, (AOTupleId *) tid);
+	return appendonly_index_only_check(aoscan->indexonlydesc, (AOTupleId *) tid, snapshot);
 }
 
 /* ------------------------------------------------------------------------

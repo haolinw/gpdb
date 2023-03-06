@@ -741,6 +741,13 @@ aoco_index_fetch_end(IndexFetchTableData *scan)
 		aocoscan->aocofetch = NULL;
 	}
 
+	if (aocoscan->indexonlydesc)
+	{
+		aocs_index_only_finish(aocoscan->indexonlydesc);
+		pfree(aocoscan->indexonlydesc);
+		aocoscan->indexonlydesc = NULL;
+	}
+
 	if (aocoscan->proj)
 	{
 		pfree(aocoscan->proj);
@@ -930,20 +937,9 @@ aocs_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
 {
 	IndexFetchAOCOData *aocoscan = (IndexFetchAOCOData *) scan;
 
-	if (!aocoscan->aocofetch)
+	if (!aocoscan->indexonlydesc)
 	{
 		Snapshot	appendOnlyMetaDataSnapshot;
-		int			natts;
-
-		/* Initiallize the projection info, assumes the whole row */
-		Assert(!aocoscan->proj);
-		natts = RelationGetNumberOfAttributes(scan->rel);
-		/* 
-		 * Will be freed in aoco_index_fetch_end() at the end of
-		 * ExecEndIndexOnlyScan().
-		 */
-		aocoscan->proj = palloc(natts * sizeof(*aocoscan->proj));
-		MemSet(aocoscan->proj, true, natts * sizeof(*aocoscan->proj));
 
 		appendOnlyMetaDataSnapshot = snapshot;
 		if (appendOnlyMetaDataSnapshot == SnapshotAny)
@@ -955,13 +951,11 @@ aocs_index_fetch_tuple_visible(struct IndexFetchTableData *scan,
 			appendOnlyMetaDataSnapshot = GetTransactionSnapshot();
 		}
 
-		aocoscan->aocofetch = aocs_fetch_init(aocoscan->xs_base.rel,
-											  snapshot,
-											  appendOnlyMetaDataSnapshot,
-											  aocoscan->proj);
+		aocoscan->indexonlydesc = aocs_index_only_init(aocoscan->xs_base.rel,
+											  		   appendOnlyMetaDataSnapshot);
 	}
 
-	return aocs_tuple_visible(aocoscan->aocofetch, (AOTupleId *) tid);
+	return aocs_index_only_check(aocoscan->indexonlydesc, (AOTupleId *) tid, snapshot);
 }
 
 static void

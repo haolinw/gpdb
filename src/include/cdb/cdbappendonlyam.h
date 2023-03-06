@@ -391,6 +391,13 @@ typedef struct AppendOnlyUniqueCheckDescData
 } AppendOnlyUniqueCheckDescData;
 
 typedef struct AppendOnlyUniqueCheckDescData *AppendOnlyUniqueCheckDesc;
+
+typedef struct AppendOnlyIndexOnlyDescData
+{
+	AppendOnlyBlockDirectory *blockDirectory;
+	AppendOnlyVisimap 		 *visimap;
+} AppendOnlyIndexOnlyDescData, *AppendOnlyIndexOnlyDesc;
+
 /*
  * Descriptor for fetches from table via an index.
  */
@@ -399,6 +406,8 @@ typedef struct IndexFetchAppendOnlyData
 	IndexFetchTableData xs_base;	/* AM independent part of the descriptor */
 
 	AppendOnlyFetchDesc aofetch;
+
+	AppendOnlyIndexOnlyDesc indexonlydesc;
 } IndexFetchAppendOnlyData;
 
 /* ----------------
@@ -432,9 +441,14 @@ extern bool appendonly_fetch(
 	AppendOnlyFetchDesc aoFetchDesc,
 	AOTupleId *aoTid,
 	TupleTableSlot *slot);
-extern bool appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
-									 AOTupleId *aoTupleId);
 extern void appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc);
+extern AppendOnlyIndexOnlyDesc appendonly_index_only_init(
+	Relation relation,
+	Snapshot snapshot);
+extern bool appendonly_index_only_check(AppendOnlyIndexOnlyDesc indexonlydesc,
+	AOTupleId *aotid,
+	Snapshot snapshot);
+extern void appendonly_index_only_finish(AppendOnlyIndexOnlyDesc indexonlydesc);
 extern void appendonly_dml_init(Relation relation);
 extern AppendOnlyInsertDesc appendonly_insert_init(Relation rel,
 												   int segno,

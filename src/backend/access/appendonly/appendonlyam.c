@@ -2283,52 +2283,6 @@ appendonly_fetch(AppendOnlyFetchDesc aoFetchDesc,
 	/* Segment file not in aoseg table.. */
 }
 
-static inline bool
-appendonly_tid_in_blkdir_entry(AppendOnlyFetchDesc aoFetchDesc,
-				   			   AOTupleId *aoTupleId)
-{
-	int			segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
-	int64		rowNum = AOTupleIdGet_rowNum(aoTupleId);
-	AppendOnlyBlockDirectoryEntry *entry = &aoFetchDesc->currentBlock.blockDirectoryEntry;
-
-	return (segmentFileNum == aoFetchDesc->blockDirectory.currentSegmentFileNum &&
-			AppendOnlyBlockDirectoryEntry_RangeHasRow(entry, rowNum));
-}
-
-bool
-appendonly_tuple_visible(AppendOnlyFetchDesc aoFetchDesc,
-						 AOTupleId *aoTupleId)
-{
-	bool got_entry = false;
-	while (!appendonly_tid_in_blkdir_entry(aoFetchDesc, aoTupleId))
-	{
-		if (got_entry)
-			return false;
-
-		if(!AppendOnlyBlockDirectory_GetEntry(&aoFetchDesc->blockDirectory,
-											  aoTupleId,
-											  0,
-											  &aoFetchDesc->currentBlock.blockDirectoryEntry))
-			return false;
-		
-		got_entry = true;
-
-		/*
-		 * Go back to check aoTupleId if in new obtained blkdir entry.
-		 * We have to do this because aoTupleId.rowRum might be greater
-		 * than blkdir last entry.lastRowNum (check the comments at the
-		 * end of AppendOnlyBlockDirectory_GetEntry()). If that's the
-		 * case, currently we think the tuple is invisible.
-		 */
-	}
-
-	if (aoFetchDesc->snapshot != SnapshotAny &&
-		!AppendOnlyVisimap_IsVisible(&aoFetchDesc->visibilityMap, aoTupleId))
-		return false;
-
-	return true;
-}
-
 void
 appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 {
@@ -2355,6 +2309,52 @@ appendonly_fetch_finish(AppendOnlyFetchDesc aoFetchDesc)
 	aoFetchDesc->segmentFileName = NULL;
 
 	pfree(aoFetchDesc->title);
+}
+
+AppendOnlyIndexOnlyDesc
+appendonly_index_only_init(Relation relation, Snapshot snapshot)
+{
+	AppendOnlyIndexOnlyDesc indexonlydesc = (AppendOnlyIndexOnlyDesc) palloc0(sizeof(AppendOnlyIndexOnlyDescData));
+
+	/* initialize the block directory */
+	indexonlydesc->blockDirectory = palloc0(sizeof(AppendOnlyBlockDirectory));
+	AppendOnlyBlockDirectory_Init_forIndexOnlyScan(indexonlydesc->blockDirectory,
+												   relation,
+												   1,
+												   snapshot);
+
+	/* initialize the visimap */
+	indexonlydesc->visimap = palloc0(sizeof(AppendOnlyVisimap));
+	AppendOnlyVisimap_Init_forIndexOnlyScan(indexonlydesc->visimap,
+											relation,
+											snapshot);
+	return indexonlydesc;
+}
+
+bool
+appendonly_index_only_check(AppendOnlyIndexOnlyDesc indexonlydesc, AOTupleId *aotid, Snapshot snapshot)
+{
+	if (!AppendOnlyBlockDirectory_CoversTuple(indexonlydesc->blockDirectory, aotid))
+		return false;
+
+	if (snapshot != SnapshotAny && !AppendOnlyVisimap_IsVisible(indexonlydesc->visimap, aotid))
+		return false;
+	
+	return true;
+}
+
+void
+appendonly_index_only_finish(AppendOnlyIndexOnlyDesc indexonlydesc)
+{
+	/* clean up the block directory */
+	AppendOnlyBlockDirectory_End_forIndexOnlyScan(indexonlydesc->blockDirectory);
+	pfree(indexonlydesc->blockDirectory);
+	indexonlydesc->blockDirectory = NULL;
+
+	/* clean up the visimap */
+	AppendOnlyVisimap_Finish_forIndexOnlyScan(indexonlydesc->visimap);
+	pfree(indexonlydesc->visimap);
+	indexonlydesc->visimap = NULL;
 }
 
 /*
