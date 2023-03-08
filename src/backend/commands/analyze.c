@@ -134,7 +134,8 @@
 #include "utils/hyperloglog/gp_hyperloglog.h"
 #include "utils/snapmgr.h"
 #include "utils/typcache.h"
-
+#include "executor/tstoreReceiver.h"
+#include "tcop/utility.h"
 
 /*
  * For Hyperloglog, we define an error margin of 0.3%. If the number of
@@ -2083,154 +2084,6 @@ acquire_index_number_of_blocks(Relation indexrel, Relation tablerel)
 }
 
 /*
- * parse_record_to_string
- *
- * CDB: a copy of record_in, but only parse the record string
- * into separate strs for each column.
- */
-static void
-parse_record_to_string(char *string, TupleDesc tupdesc, char** values, bool *nulls)
-{
-	char	*ptr;
-	int	ncolumns;
-	int	i;
-	bool	needComma;
-	StringInfoData	buf;
-
-	Assert(string != NULL);
-	Assert(values != NULL);
-	Assert(nulls != NULL);
-	
-	ncolumns = tupdesc->natts;
-	needComma = false;
-
-	/*
-	 * Scan the string.  We use "buf" to accumulate the de-quoted data for
-	 * each column, which is then fed to the appropriate input converter.
-	 */
-	ptr = string;
-
-	/* Allow leading whitespace */
-	while (*ptr && isspace((unsigned char) *ptr))
-		ptr++;
-	if (*ptr++ != '(')
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("malformed record literal: \"%s\"", string),
-				 errdetail("Missing left parenthesis.")));
-	}
-
-	initStringInfo(&buf);
-
-	for (i = 0; i < ncolumns; i++)
-	{
-		/* Ignore dropped columns in datatype, but fill with nulls */
-		if (TupleDescAttr(tupdesc, i)->attisdropped)
-		{
-			values[i] = NULL;
-			nulls[i] = true;
-			continue;
-		}
-
-		if (needComma)
-		{
-			/* Skip comma that separates prior field from this one */
-			if (*ptr == ',')
-				ptr++;
-			else
-			{
-				/* *ptr must be ')' */
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-						 errmsg("malformed record literal: \"%s\"", string),
-						 errdetail("Too few columns.")));
-			}
-		}
-
-		/* Check for null: completely empty input means null */
-		if (*ptr == ',' || *ptr == ')')
-		{
-			values[i] = NULL;
-			nulls[i] = true;
-		}
-		else
-		{
-			/* Extract string for this column */
-			bool		inquote = false;
-
-			resetStringInfo(&buf);
-			while (inquote || !(*ptr == ',' || *ptr == ')'))
-			{
-				char		ch = *ptr++;
-
-				if (ch == '\0')
-				{
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-							 errmsg("malformed record literal: \"%s\"",
-									string),
-							 errdetail("Unexpected end of input.")));
-				}
-				if (ch == '\\')
-				{
-					if (*ptr == '\0')
-					{
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-								 errmsg("malformed record literal: \"%s\"",
-										string),
-								 errdetail("Unexpected end of input.")));
-					}
-					appendStringInfoChar(&buf, *ptr++);
-				}
-				else if (ch == '"')
-				{
-					if (!inquote)
-						inquote = true;
-					else if (*ptr == '"')
-					{
-						/* doubled quote within quote sequence */
-						appendStringInfoChar(&buf, *ptr++);
-					}
-					else
-						inquote = false;
-				}
-				else
-					appendStringInfoChar(&buf, ch);
-			}
-
-			values[i] = palloc(strlen(buf.data) + 1);
-			memcpy(values[i], buf.data, strlen(buf.data) + 1);
-			nulls[i] = false;
-		}
-
-		/*
-		 * Prep for next column
-		 */
-		needComma = true;
-	}
-
-	if (*ptr++ != ')')
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("malformed record literal: \"%s\"", string),
-				 errdetail("Too many columns.")));
-	}
-	/* Allow trailing whitespace */
-	while (*ptr && isspace((unsigned char) *ptr))
-		ptr++;
-	if (*ptr)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("malformed record literal: \"%s\"", string),
-				 errdetail("Junk after right parenthesis.")));
-	}
-}
-
-/*
  * Collect a sample from segments.
  *
  * Calls the gp_acquire_sample_rows() helper function on each segment,
@@ -2253,15 +2106,26 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 	AttInMetadata *attinmeta;
 	StringInfoData str;
 	int			sampleTuples;	/* 32 bit - assume that number of tuples will not > 2B */
-	char	  **funcRetValues;
+	Datum	   *funcRetValues;
 	bool	   *funcRetNulls;
-	char	  **values;
+
 	int			numLiveColumns;
 	int			perseg_targrows;
 	int			ncolumns;
-	CdbPgResults cdb_pgresults = {NULL, 0};
 	int			i;
 	int			index = 0;
+	char	   *sql;
+	List	   *raw_parsetree_list;
+	RawStmt	   *parsetree;
+	List	   *querytree_list;
+	List	   *plantree_list;
+	PlannedStmt *plan_stmt;
+	Portal		portal;
+	DestReceiver *destReceiver;
+	QueryDesc  *queryDesc = NULL;
+	TupleTableSlot *slot;
+	Datum	   *dvalues;
+	bool	   *dnulls;
 
 	Assert(targrows > 0.0);
 
@@ -2317,7 +2181,67 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 	 * Execute it.
 	 */
 	elog(elevel, "Executing SQL: %s", str.data);
-	CdbDispatchCommand(str.data, DF_WITH_SNAPSHOT | DF_CANCEL_ON_ERROR, &cdb_pgresults);
+	sql = str.data;
+	/* Create a new portal to run the query in */
+	portal = CreateNewPortal();
+	/* Don't display the portal in pg_cursors, it is for internal use only */
+	portal->visible = false;
+	/* use a tuplestore to store received tuples to avoid out of memory error */
+	PortalCreateHoldStore(portal);
+	destReceiver = CreateDestReceiver(DestTuplestore);
+	SetTuplestoreDestReceiverParams(destReceiver,
+									portal->holdStore,
+									portal->holdContext,
+									false);
+
+	/*
+	 * Parse the SQL string into a list of raw parse trees.
+	 */
+	raw_parsetree_list = pg_parse_query(sql);
+
+	/*
+	 * Do parse analysis, rule rewrite, planning, and execution for each raw
+	 * parsetree.
+	 */
+
+	/* There is only one element in list due to simple select. */
+	Assert(list_length(raw_parsetree_list) == 1);
+	parsetree = (RawStmt *) linitial(raw_parsetree_list);
+
+	querytree_list = pg_analyze_and_rewrite(parsetree,
+											sql,
+											NULL,
+											0,
+											NULL);
+	plantree_list = pg_plan_queries(querytree_list, 0, NULL);
+
+	/* There is only one statement in list due to simple select. */
+	Assert(list_length(plantree_list) == 1);
+	plan_stmt = (PlannedStmt *) linitial(plantree_list);
+
+	queryDesc = CreateQueryDesc(plan_stmt,
+								sql,
+								GetActiveSnapshot(),
+								InvalidSnapshot,
+								destReceiver,
+								NULL,
+								NULL,
+								INSTRUMENT_NONE);
+
+	/* Call ExecutorStart to prepare the plan for execution */
+	ExecutorStart(queryDesc, 0);
+
+	/* Run the plan  */
+	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
+
+	/* Wait for completion of all qExec processes. */
+	if (queryDesc->estate->dispatcherState
+		&& queryDesc->estate->dispatcherState->primaryResults)
+	{
+		cdbdisp_checkDispatchResult(queryDesc->estate->dispatcherState, DISPATCH_WAIT_NONE);
+	}
+
+	ExecutorFinish(queryDesc);
 
 	/*
 	 * Build a modified tuple descriptor for the table.
@@ -2334,11 +2258,11 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 	TupleDescInitEntry(funcTupleDesc, (AttrNumber) 1, "", FLOAT8OID, -1, 0);
 	TupleDescInitEntry(funcTupleDesc, (AttrNumber) 2, "", FLOAT8OID, -1, 0);
 	TupleDescInitEntry(funcTupleDesc, (AttrNumber) 3, "", FLOAT8ARRAYOID, -1, 0);
-	
+
 	for (i = 0; i < relDesc->natts; i++)
 	{
 		Form_pg_attribute attr = TupleDescAttr(relDesc, i);
-		
+
 		Oid			typid = gp_acquire_sample_rows_col_type(attr->atttypid);
 
 		TupleDescAttr(sampleTupleDesc, i)->atttypid = typid;
@@ -2347,7 +2271,7 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 		{
 			TupleDescInitEntry(funcTupleDesc, (AttrNumber) 4 + index, "",
 							   typid, attr->atttypmod, attr->attndims);
-		
+
 			index++;
 		}
 	}
@@ -2362,87 +2286,136 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 	 * Read the result set from each segment. Gather the sample rows *rows,
 	 * and sum up the summary rows for grand 'totalrows' and 'totaldeadrows'.
 	 */
-	funcRetValues = (char **) palloc0(funcTupleDesc->natts * sizeof(char *));
+	funcRetValues = (Datum *) palloc0(funcTupleDesc->natts * sizeof(Datum));
 	funcRetNulls = (bool *) palloc(funcTupleDesc->natts * sizeof(bool));
-	values = (char **) palloc0(relDesc->natts * sizeof(char *));
+	dvalues = (Datum *) palloc0(relDesc->natts * sizeof(Datum));
+	dnulls = (bool *) palloc(relDesc->natts * sizeof(bool));
 	sampleTuples = 0;
 	*totalrows = 0;
 	*totaldeadrows = 0;
-	for (int resultno = 0; resultno < cdb_pgresults.numResults; resultno++)
+
+	slot = MakeSingleTupleTableSlot(queryDesc->tupDesc, &TTSOpsMinimalTuple);
+	/*
+	 * if a tuple is large and set default_statistics_target to a large value,
+	 * we need a lot of memory to store tuples into variable rows,
+	 * if memory is not sufficent it will hit out of memory error,
+	 * then we call AtAbort_Portals-->MemoryContextDeleteChildren，
+	 * this will delete MotionLayerMemCtxt, after that we call
+	 * ResourceOwnerReleaseInternal-->DestroyTupleRemapper to pfree
+	 * a memory be allocated from MotionLayerMemCtxt and cause panic.
+	 * So if here hit an error, we should call mppExecutorCleanup to
+	 * DestroyTupleRemapper before MotionLayerMemCtxt is deleted.
+	 */
+	PG_TRY();
 	{
-		struct pg_result *pgresult = cdb_pgresults.pg_results[resultno];
-		bool		got_summary = false;
-		double		this_totalrows = 0;
-		double		this_totaldeadrows = 0;
-
-		if (PQresultStatus(pgresult) != PGRES_TUPLES_OK)
+		for (;;)
 		{
-			cdbdisp_clearCdbPgResults(&cdb_pgresults);
-			ereport(ERROR,
-					(errmsg("unexpected result from segment: %d",
-							PQresultStatus(pgresult))));
-		}
+			bool		ok;
+			TupleDesc	typeinfo;
+			int			natts;
+			Datum		attr;
+			bool		isnull;
+			double		this_totalrows = 0;
+			double		this_totaldeadrows = 0;
 
-		if (GpPolicyIsReplicated(onerel->rd_cdbpolicy))
-		{
-			/*
-			 * A replicated table has the same data in all segments. Arbitrarily,
-			 * use the sample from the first segment, and discard the rest.
-			 * (This is rather inefficient, of course. It would be better to
-			 * dispatch to only one segment, but there is no easy API for that
-			 * in the dispatcher.)
-			 */
-			if (resultno > 0)
-				continue;
-		}
+			ok = tuplestore_gettupleslot(portal->holdStore, true, false, slot);
 
-		for (int rowno = 0; rowno < PQntuples(pgresult); rowno++)
-		{
-			/*
-			 * We cannot use record_in function to get row record here.
-			 * Since the result row may contain just the totalrows info where the data columns
-			 * are NULLs. Consider domain: 'create domain dnotnull varchar(15) NOT NULL;'
-			 * NULLs are not allowed in data columns.
-			 */
-			char * rowStr = PQgetvalue(pgresult, rowno, 0);
+			if (!ok)
+				break;
 
-			if (rowStr == NULL)
-				elog(ERROR, "got NULL pointer from return value of gp_acquire_sample_rows");
+			typeinfo = slot->tts_tupleDescriptor;
+			natts = typeinfo->natts;
 
-			parse_record_to_string(rowStr, funcTupleDesc, funcRetValues, funcRetNulls);
-
-			if (!funcRetNulls[0])
+			/* There should be only one attribute with OID RECORDOID. */
+			if (1 != natts)
 			{
-				/* This is a summary row. */
-				if (got_summary)
-					elog(ERROR, "got duplicate summary row from gp_acquire_sample_rows");
-
-				this_totalrows = DatumGetFloat8(DirectFunctionCall1(float8in,
-																	CStringGetDatum(funcRetValues[0])));
-				this_totaldeadrows = DatumGetFloat8(DirectFunctionCall1(float8in,
-																		CStringGetDatum(funcRetValues[1])));
-				got_summary = true;
+				elog(ERROR,
+					"wrong number of attributes %d when 1 expected",
+					natts);
 			}
-			else
+
+			if (RECORDOID != typeinfo->attrs[0].atttypid)
 			{
-				/* This is a sample row. */
-				if (sampleTuples >= targrows)
-					elog(ERROR, "too many sample rows received from gp_acquire_sample_rows");
+				elog(ERROR,
+					"wrong attribute OID %d, RECORDOID %d is expected",
+					typeinfo->attrs[0].atttypid, RECORDOID);
 
-				/* Read the 'toolarge' bitmap, if any */
-				if (colLargeRowIndexes && !funcRetNulls[2])
+			}
+
+			/* Make sure the tuple is fully deconstructed */
+			slot_getallattrs(slot);
+
+			/* There should be only one attribute with OID RECORDOID */
+			attr = slot_getattr(slot, 1, &isnull);
+			if (isnull)
+			{
+				elog(ERROR,
+					"null value for attribute in tuple");
+			}
+
+			/* Get record from attribute and parse it */
+			{
+				HeapTupleHeader rec = (HeapTupleHeader) PG_DETOAST_DATUM(attr);
+				Oid			tupType;
+				int32		tupTypmod;
+				TupleDesc	tupdesc;
+				HeapTupleData tuple;
+
+				/* Extract type info from the tuple itself */
+				tupType = HeapTupleHeaderGetTypeId(rec);
+				tupTypmod = HeapTupleHeaderGetTypMod(rec);
+				tupdesc = lookup_rowtype_tupdesc(tupType, tupTypmod);
+
+				/* Build a temporary HeapTuple control structure */
+				tuple.t_len = HeapTupleHeaderGetDatumLength(rec);
+				ItemPointerSetInvalid(&(tuple.t_self));
+				tuple.t_data = rec;
+
+				/* Break down the tuple into fields */
+				heap_deform_tuple(&tuple, tupdesc, funcRetValues, funcRetNulls);
+
+				if (!funcRetNulls[0])
 				{
-					ArrayType  *arrayVal;
-					Datum	   *largelength;
-					bool	   *nulls;
-					int	    numelems;
-					arrayVal = DatumGetArrayTypeP(OidFunctionCall3(F_ARRAY_IN,
-											CStringGetDatum(funcRetValues[2]),
-											FLOAT8OID,
-											-1));
-					deconstruct_array(arrayVal, FLOAT8OID, 8, true, 'd',
-								&largelength, &nulls, &numelems);
+					/* This is a summary row. */
+					this_totalrows = DatumGetFloat8(funcRetValues[0]);
+					this_totaldeadrows = DatumGetFloat8(funcRetValues[1]);
+					(*totalrows) += this_totalrows;
+					(*totaldeadrows) += this_totaldeadrows;
+				}
+				else
+				{
+					/* This is a sample row. */
+					if (sampleTuples >= targrows)
+						elog(ERROR, "too many sample rows received from gp_acquire_sample_rows");
 
+					/* Read the 'toolarge' bitmap, if any */
+					if (colLargeRowIndexes && !funcRetNulls[2])
+					{
+						ArrayType  *arrayVal;
+						Datum	   *largelength;
+						bool	   *nulls;
+						int	    numelems;
+						arrayVal = DatumGetArrayTypeP(funcRetValues[2]);
+						deconstruct_array(arrayVal, FLOAT8OID, 8, true, 'd',
+									&largelength, &nulls, &numelems);
+
+						for (i = 0; i < relDesc->natts; i++)
+						{
+							Form_pg_attribute attr = TupleDescAttr(relDesc, i);
+
+							if (attr->attisdropped)
+								continue;
+
+							if (largelength[i] != (Datum) 0)
+							{
+								colLargeRowIndexes[i] = bms_add_member(colLargeRowIndexes[i], sampleTuples);
+								colLargeRowLength[i] += DatumGetFloat8(largelength[i]);
+							}
+						}
+					}
+
+					/* Process the columns */
+					index = 0;
 					for (i = 0; i < relDesc->natts; i++)
 					{
 						Form_pg_attribute attr = TupleDescAttr(relDesc, i);
@@ -2450,67 +2423,51 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 						if (attr->attisdropped)
 							continue;
 
-						if (largelength[i] != (Datum) 0)
-						{
-							colLargeRowIndexes[i] = bms_add_member(colLargeRowIndexes[i], sampleTuples);
-							colLargeRowLength[i] += DatumGetFloat8(largelength[i]);
-						}
+						dnulls[i] = funcRetNulls[FIX_ATTR_NUM + index];
+						dvalues[i] = funcRetValues[FIX_ATTR_NUM + index];
+						index++;	/* Move index to the next result set attribute */
 					}
+
+					/*
+					* Form a tuple
+					*/
+					rows[sampleTuples] = heap_form_tuple(attinmeta->tupdesc,
+														dvalues,
+														dnulls);
+					sampleTuples++;
+
+					/*
+					* note: we don't set the OIDs in the sample. ANALYZE doesn't
+					* collect stats for them
+					*/
 				}
-
-				/* Process the columns */
-				index = 0;
-				for (i = 0; i < relDesc->natts; i++)
-				{
-					Form_pg_attribute attr = TupleDescAttr(relDesc, i);
-
-					if (attr->attisdropped)
-						continue;
-
-					if (funcRetNulls[FIX_ATTR_NUM + index])
-						values[i] = NULL;
-					else
-						values[i] = funcRetValues[FIX_ATTR_NUM + index];
-					index++; /* Move index to the next result set attribute */
-				}
-
-				rows[sampleTuples] = BuildTupleFromCStrings(attinmeta, values);
-				sampleTuples++;
-
-				/*
-				 * note: we don't set the OIDs in the sample. ANALYZE doesn't
-				 * collect stats for them
-				 */
+				ReleaseTupleDesc(tupdesc);
 			}
+
+			ExecClearTuple(slot);
 		}
-
-		if (!got_summary)
-			elog(ERROR, "did not get summary row from gp_acquire_sample_rows");
-
-		if (resultno >= onerel->rd_cdbpolicy->numsegments)
-		{
-			/*
-			 * This result is for a segment that's not holding any data for this
-			 * table. Should get 0 rows.
-			 */
-			if (this_totalrows != 0)
-				elog(WARNING, "table \"%s\" contains rows in segment %d, which is outside the # of segments for the table's policy (%d segments)",
-					 RelationGetRelationName(onerel), resultno, onerel->rd_cdbpolicy->numsegments);
-		}
-
-		(*totalrows) += this_totalrows;
-		(*totaldeadrows) += this_totaldeadrows;
 	}
-	for (i = 0; i < funcTupleDesc->natts; i++)
+	PG_CATCH();
 	{
-		if (funcRetValues[i])
-			pfree(funcRetValues[i]);
+		mppExecutorCleanup(queryDesc);
+		PG_RE_THROW();
 	}
+	PG_END_TRY();
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	ExecutorEnd(queryDesc);
+	FreeQueryDesc(queryDesc);
+	list_free_deep(plantree_list);
+	list_free_deep(querytree_list);
+	list_free_deep(raw_parsetree_list);
+	PortalDrop(portal, false);
+
 	pfree(funcRetValues);
 	pfree(funcRetNulls);
-	pfree(values);
 
-	cdbdisp_clearCdbPgResults(&cdb_pgresults);
+	pfree(dvalues);
+	pfree(dnulls);
 
 	return sampleTuples;
 }
