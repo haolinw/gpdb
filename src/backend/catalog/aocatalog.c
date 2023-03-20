@@ -27,6 +27,7 @@
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
+#include "utils/snapmgr.h"
 #include "catalog/gp_fastsequence.h"
 
 /*
@@ -244,4 +245,26 @@ IsAppendonlyMetadataRelkind(const char relkind) {
 	return (relkind == RELKIND_AOSEGMENTS ||
 			relkind == RELKIND_AOBLOCKDIR ||
 			relkind == RELKIND_AOVISIMAP);
+}
+
+Snapshot
+DetermineAOAuxSnapshot(const char relkind, Snapshot in_snapshot)
+{
+	Snapshot out_snapshot = in_snapshot;
+
+	switch (relkind)
+	{
+		case RELKIND_AOSEGMENTS:
+			break;
+
+		case RELKIND_AOBLOCKDIR:
+			if (IsolationUsesXactSnapshot())
+				out_snapshot = SnapshotSelf;
+			break;
+
+		case RELKIND_AOVISIMAP:
+			break;
+	}
+
+	return out_snapshot;
 }

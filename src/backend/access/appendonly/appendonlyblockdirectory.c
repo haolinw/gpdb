@@ -16,6 +16,7 @@
 
 #include "cdb/cdbappendonlyblockdirectory.h"
 #include "catalog/aoblkdir.h"
+#include "catalog/aocatalog.h"
 #include "access/heapam.h"
 #include "access/genam.h"
 #include "catalog/indexing.h"
@@ -205,7 +206,8 @@ AppendOnlyBlockDirectory_Init_forSearch(
 	blockDirectory->segmentFileInfo = segmentFileInfo;
 	blockDirectory->totalSegfiles = totalSegfiles;
 	blockDirectory->aoRel = aoRel;
-	blockDirectory->appendOnlyMetaDataSnapshot = appendOnlyMetaDataSnapshot;
+	blockDirectory->appendOnlyMetaDataSnapshot = DetermineAOAuxSnapshot(RELKIND_AOBLOCKDIR,
+																		appendOnlyMetaDataSnapshot);
 	blockDirectory->numColumnGroups = numColumnGroups;
 	blockDirectory->isAOCol = isAOCol;
 	blockDirectory->currentSegmentFileNum = -1;

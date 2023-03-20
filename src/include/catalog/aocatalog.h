@@ -32,4 +32,6 @@ extern bool CreateAOAuxiliaryTable(
 
 extern bool IsAppendonlyMetadataRelkind(const char relkind);
 
+extern Snapshot DetermineAOAuxSnapshot(const char relkind, Snapshot in_snapshot);
+
 #endif   /* AOCATALOG_H */
