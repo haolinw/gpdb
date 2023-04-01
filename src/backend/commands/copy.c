@@ -3513,6 +3513,7 @@ CopyFrom(CopyState cstate)
 	TupleTableSlot *baseSlot;
 	ExprContext *econtext;		/* used for ExecEvalExpr for default atts */
 	MemoryContext oldcontext = CurrentMemoryContext;
+	MemoryContext batchcontext;
 
 	ErrorContextCallback errcallback;
 	CommandId	mycid = GetCurrentCommandId(true);
@@ -3865,6 +3866,13 @@ CopyFrom(CopyState cstate)
 
 	CopyInitDataParser(cstate);
 
+	/*
+	 * Set up memory context for batches. For cases without batching we could
+	 * use the per-tuple context, but it's simpler to just use it every time.
+	 */
+	batchcontext = AllocSetContextCreate(CurrentMemoryContext,
+										 "batch context",
+										 ALLOCSET_DEFAULT_SIZES);
 	for (;;)
 	{
 		TupleTableSlot *slot;
@@ -3874,17 +3882,16 @@ CopyFrom(CopyState cstate)
 
 		CHECK_FOR_INTERRUPTS();
 
-		if (nTotalBufferedTuples == 0)
-		{
-			/*
-			 * Reset the per-tuple exprcontext. We can only do this if the
-			 * tuple buffer is empty. (Calling the context the per-tuple
-			 * memory context is a bit of a misnomer now.)
-			 */
-			ResetPerTupleExprContext(estate);
-		}
+		/*
+		 * Reset the per-tuple exprcontext. We do this after every tuple, to
+		 * clean-up after expression evaluations etc.
+		 */
+		ResetPerTupleExprContext(estate);
 
-		/* Switch into its memory context */
+		/*
+		 * Switch to per-tuple context before calling NextCopyFrom, which does
+		 * evaluate default expressions etc. and requires per-tuple context.
+		 */
 		MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 
 		/* Initialize all values for row to NULL */
@@ -4145,7 +4152,8 @@ CopyFrom(CopyState cstate)
 					resultRelInfo->bufferedTuplesSize = 0;
 				}
 
-				MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+				/* Switch into per-batch memory context before forming the tuple. */
+				MemoryContextSwitchTo(batchcontext);
 				/* Add this tuple to the tuple buffer */
 				tuple = ExecCopySlotHeapTuple(slot);
 				resultRelInfo->bufferedTuples[resultRelInfo->nBufferedTuples++] = tuple;
@@ -4171,6 +4179,30 @@ CopyFrom(CopyState cstate)
 										  slot, firstBufferedLineNo);
 					nTotalBufferedTuples = 0;
 					totalBufferedTuplesSize = 0;
+
+					/*
+					 * The tuple is already allocated in the batch context, which
+					 * we want to reset.  So to keep the tuple we copy it into the
+					 * short-lived (per-tuple) context, reset the batch context
+					 * and then copy it back into the per-batch one.
+					 */
+					MemoryContext oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+					tuple = heap_copytuple(tuple);
+					MemoryContextSwitchTo(oldctx);
+
+					/* cleanup the old batch */
+					MemoryContextReset(batchcontext);
+
+					/* copy the tuple back to the per-batch context */
+					oldctx = MemoryContextSwitchTo(batchcontext);
+					tuple = heap_copytuple(tuple);
+					MemoryContextSwitchTo(oldctx);
+
+					/*
+					 * Also push the tuple copy to the slot (resetting the context
+					 * invalidated the slot contents).
+					 */
+					ExecStoreHeapTuple(tuple, slot, false);
 				}
 			}
 			else
@@ -4396,6 +4428,8 @@ CopyFrom(CopyState cstate)
 	}
 
 	MemoryContextSwitchTo(oldcontext);
+
+	MemoryContextDelete(batchcontext);
 
 	FreeDistributionData(distData);
 
