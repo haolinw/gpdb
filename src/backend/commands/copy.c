@@ -4198,11 +4198,11 @@ CopyFrom(CopyState cstate)
 					tuple = heap_copytuple(tuple);
 					MemoryContextSwitchTo(oldctx);
 
-					/*
-					 * Also push the tuple copy to the slot (resetting the context
-					 * invalidated the slot contents).
-					 */
-					ExecStoreHeapTuple(tuple, slot, false);
+					// /*
+					//  * Also push the tuple copy to the slot (resetting the context
+					//  * invalidated the slot contents).
+					//  */
+					// ExecStoreHeapTuple(tuple, slot, InvalidBuffer, false);
 				}
 			}
 			else
