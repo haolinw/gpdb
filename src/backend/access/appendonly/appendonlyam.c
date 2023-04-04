@@ -114,7 +114,7 @@ initscan(AppendOnlyScanDesc scan, ScanKey key)
 	scan->aos_segfiles_processed = 0;
 	scan->aos_need_new_segfile = true;	/* need to assign a file to be scanned */
 	scan->aos_done_all_segfiles = false;
-	scan->bufferDone = true;
+	scan->needNextBuffer = true;
 
 	if (scan->initedStorageRoutines)
 		AppendOnlyExecutorReadBlock_ResetCounts(
@@ -200,7 +200,7 @@ SetNextFileSegForRead(AppendOnlyScanDesc scan)
 										 &scan->storageRead,
 										 scan->usableBlockSize);
 
-		scan->bufferDone = true;	/* so we read a new buffer right away */
+		scan->needNextBuffer = true;	/* so we read a new buffer right away */
 
 		scan->initedStorageRoutines = true;
 	}
@@ -1187,7 +1187,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 
 	if (readblock->rowCount <= 0)
 		/* haven't read block */
-		Assert(scan->bufferDone);
+		Assert(scan->needNextBuffer);
 	else
 	{
 		/* block was read */
@@ -1196,16 +1196,16 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 
 		if (scan->nextrow + rowcount - 1 >= targrow)
 			/* haven't finished scanning on current block */
-			scan->bufferDone = false;
+			scan->needNextBuffer = false;
 		else
 		{
 			/* skip scanning remaining rows */
 			scan->nextrow += rowcount;
-			scan->bufferDone = true;
+			scan->needNextBuffer = true;
 		}
 	}
 
-	if (!scan->bufferDone)
+	if (!scan->needNextBuffer)
 		return true;
 
 	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
@@ -1225,7 +1225,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 		{
 			AppendOnlyExecutorReadBlock_GetContents(readblock);
 			/* got a new buffer to consume */
-			scan->bufferDone = false;
+			scan->needNextBuffer = false;
 			return true;
 		}
 
@@ -1381,7 +1381,7 @@ appendonlygettup(AppendOnlyScanDesc scan,
 	{
 		bool		found;
 
-		if (scan->bufferDone)
+		if (scan->needNextBuffer)
 		{
 			/*
 			 * Get the next block. We call this function until we successfully
@@ -1395,7 +1395,7 @@ appendonlygettup(AppendOnlyScanDesc scan,
 					return false;
 			}
 
-			scan->bufferDone = false;
+			scan->needNextBuffer = false;
 		}
 
 		found = AppendOnlyExecutorReadBlock_ScanNextTuple(&scan->executorReadBlock,
@@ -1423,7 +1423,7 @@ appendonlygettup(AppendOnlyScanDesc scan,
 		else
 		{
 			/* no more items in the varblock, get new buffer */
-			scan->bufferDone = true;
+			scan->needNextBuffer = true;
 		}
 	}
 }

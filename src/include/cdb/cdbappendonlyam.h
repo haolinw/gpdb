@@ -200,7 +200,7 @@ typedef struct AppendOnlyScanDescData
 	AppendOnlyExecutorReadBlock	executorReadBlock;
 
 	/* current scan state */
-	bool		bufferDone;
+	bool		needNextBuffer;
 
 	bool	initedStorageRoutines;
 
