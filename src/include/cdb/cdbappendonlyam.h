@@ -134,7 +134,7 @@ typedef struct AppendOnlyExecutorReadBlock
 	int				segmentFileNum;
 
 	int64			totalRowsScanned;
-	int64			blockRowsScanned;
+	int64			blockRowsProcessed;
 
 	int64			blockFirstRowNum;
 	int64			headerOffsetInFile;

@@ -1176,7 +1176,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 static inline int64
 appendonly_block_remaining_rows(AppendOnlyScanDesc scan)
 {
-	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsScanned);
+	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsProcessed);
 }
 
 static bool
@@ -1211,14 +1211,14 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
 	{
 		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
-			 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, blockRowsScanned: %ld, "
+			 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, blockRowsProcessed: %ld, "
 			 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
 			 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
-			 scan->cur_seg_rows_scanned, scan->executorReadBlock.blockRowsScanned,
+			 scan->cur_seg_rows_scanned, scan->executorReadBlock.blockRowsProcessed,
 			 scan->executorReadBlock.rowCount);
 
-		/* new block, reset blockRowsScanned */
-		scan->executorReadBlock.blockRowsScanned = 0;
+		/* new block, reset blockRowsProcessed */
+		scan->executorReadBlock.blockRowsProcessed = 0;
 		rowcount = appendonly_block_remaining_rows(scan);
 		Assert(rowcount > 0);
 		if (scan->nextrow + rowcount - 1 >= targrow)
@@ -1307,8 +1307,8 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 		return false;
 
 	rowstoscan = targrow - aoscan->nextrow + 1;
-	/* nrows = blockRowsScanned + rowstoscan */
-	nrows = aoscan->executorReadBlock.blockRowsScanned + rowstoscan;
+	/* nrows = blockRowsProcessed + rowstoscan */
+	nrows = aoscan->executorReadBlock.blockRowsProcessed + rowstoscan;
 	/* rowNum = blockFirstRowNum + nrows - 1 */
 	rownum = varblock->blockFirstRowNum + nrows - 1;
 
@@ -1333,7 +1333,7 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 out:
 	/* update rows scanned */
 	aoscan->cur_seg_rows_scanned += rowstoscan;
-	aoscan->executorReadBlock.blockRowsScanned += rowstoscan;
+	aoscan->executorReadBlock.blockRowsProcessed += rowstoscan;
 	/* update nextrow position */
 	aoscan->nextrow = targrow + 1;
 

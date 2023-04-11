@@ -848,7 +848,7 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 static inline int
 aocs_block_remaining_rows(DatumStreamRead *ds)
 {
-	return (ds->blockRowCount - ds->blockRowsScanned);
+	return (ds->blockRowCount - ds->blockRowsProcessed);
 }
 
 bool
@@ -900,18 +900,18 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		{
 			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
 				 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, nth: %d, "
-				 "blockRowCount: %d, blockRowsScanned: %d]", targrow, startrow + rowcount - 1,
+				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				 startrow+ rowcount - 1 - targrow, startrow, rowcount,
 				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount,
-				 ds->blockRowsScanned);
+				 ds->blockRowsProcessed);
 
 			if (datumstreamread_block_info(ds))
 			{
 				rowcount = ds->blockRowCount;
 				Assert(rowcount > 0);
 
-				/* new block, reset blockRowsScanned */
-				ds->blockRowsScanned = 0;
+				/* new block, reset blockRowsProcessed */
+				ds->blockRowsProcessed = 0;
 
 				if (startrow + rowcount - 1 >= targrow)
 				{
@@ -977,8 +977,8 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	Assert(startrow <= endrow);
 
 	rowstoscan = endrow - startrow + 1;
-	/* nrows = blockRowsScanned + rowstoscan */
-	nrows = ds->blockRowsScanned + rowstoscan;
+	/* nrows = blockRowsProcessed + rowstoscan */
+	nrows = ds->blockRowsProcessed + rowstoscan;
 	/* rowNum = blockFirstRowNum + nrows - 1 */
 	rownum = ds->blockFirstRowNum + nrows - 1;
 
@@ -1005,7 +1005,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 
 out:
 	/* update rows scanned */
-	ds->blockRowsScanned += rowstoscan;
+	ds->blockRowsProcessed += rowstoscan;
 
 	return ret;
 }
