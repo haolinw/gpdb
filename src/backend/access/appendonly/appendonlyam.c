@@ -1269,6 +1269,10 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
 
+	/* ensure the target minipage entry was stored in fetch descriptor */
+	Assert(scan->aofetch->blockDirectory.minipages == scan->blkdirscan->mpinfo);
+	Assert(scan->aofetch->blockDirectory.cached_mpentry_num != InvalidEntryNum);
+
 	/* fetch the target tuple */
 	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
 		return false;

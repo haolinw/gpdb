@@ -95,6 +95,8 @@ typedef struct MinipagePerColumnGroup
 #define IsMinipageFull(minipagePerColumnGroup) \
 	((minipagePerColumnGroup)->numMinipageEntries == (uint32) gp_blockdirectory_minipage_size)
 
+#define InvalidEntryNum (-1)
+
 /*
  * Define a structure for the append-only relation block directory.
  */
@@ -134,6 +136,11 @@ typedef struct AppendOnlyBlockDirectory
 	int numScanKeys;
 	ScanKey scanKeys;
 	StrategyNumber *strategyNumbers;
+
+	/*
+	 * Minipage entry number, for caching purpose.
+	 */
+	int cached_mpentry_num;
 
 }	AppendOnlyBlockDirectory;
 

@@ -156,6 +156,8 @@ init_internal(AppendOnlyBlockDirectory *blockDirectory)
 		ItemPointerSetInvalid(&minipageInfo->tupleTid);
 	}
 
+	blockDirectory->cached_mpentry_num = InvalidEntryNum;
+
 	MemoryContextSwitchTo(oldcxt);
 }
 
@@ -231,7 +233,7 @@ AppendOnlyBlockDirectory_Init_forSearch_InSequence(AOBlkDirScan blkdirscan,
 	blkdirscan->segno = -1;
 	blkdirscan->colgroup = 0;
 	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = 0;
+	blkdirscan->mpentryi = InvalidEntryNum;
 }
 
 /*
@@ -659,14 +661,23 @@ AppendOnlyBlockDirectory_GetEntry(
 
 		if (rowNum >= firstentry->firstRowNum)
 		{
-			/*
-			 * Check if the existing minipage contains the requested rowNum.
-			 * If so, just get it.
-			 */
-			entry_no = find_minipage_entry(minipageInfo->minipage,
-										   minipageInfo->numMinipageEntries,
-										   rowNum);
-			if (entry_no != -1)
+			if (blockDirectory->cached_mpentry_num != InvalidEntryNum)
+			{
+				/* currently, only ANALYZE reaches here */
+				entry_no = blockDirectory->cached_mpentry_num;
+			}
+			else
+			{
+				/*
+				 * Check if the existing minipage contains the requested rowNum.
+				 * If so, just get it.
+				 */
+				entry_no = find_minipage_entry(minipageInfo->minipage,
+											   minipageInfo->numMinipageEntries,
+											   rowNum);
+			}
+
+			if (entry_no != InvalidEntryNum)
 			{
 				return set_directoryentry_range(blockDirectory,
 												columnGroupNo,
@@ -968,7 +979,7 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 		entry_no = find_minipage_entry(minipageInfo->minipage,
 									   minipageInfo->numMinipageEntries,
 									   rowNum);
-		if (entry_no != -1)
+		if (entry_no != InvalidEntryNum)
 		{
 			found = true;
 			break;
@@ -1630,7 +1641,7 @@ AppendOnlyBlockDirectory_End_forSearch_InSequence(AOBlkDirScan blkdirscan)
 	blkdirscan->segno = -1;
 	blkdirscan->colgroup = 0;
 	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = 0;
+	blkdirscan->mpentryi = InvalidEntryNum;
 	blkdirscan->blkdir = NULL;
 }
 
@@ -1773,7 +1784,7 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 			tuple = systable_getnext_ordered(blkdirscan->sysscan, ForwardScanDirection);
 			if (HeapTupleIsValid(tuple))
 			{
-				tupdesc = RelationGetDescr(blkdirscan->blkdir->blkdirRel);
+				tupdesc = RelationGetDescr(blkdir->blkdirRel);
 				extract_minipage(blkdir, tuple, tupdesc, colgroup, false);
 				/* new minipage */
 				blkdirscan->mpinfo = &blkdir->minipages[colgroup];
@@ -1786,7 +1797,7 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 				blkdirscan->sysscan = NULL;
 				blkdirscan->segno = -1;
 				blkdirscan->colgroup = 0;
-				return rownum;
+				goto out;
 			}
 		}
 
@@ -1807,7 +1818,7 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 			{
 				rownum = entry->firstRowNum + (targrow - *startrow);
 				blkdirscan->mpentryi = i;
-				return rownum;
+				goto out;
 			}
 
 			*startrow += entry->rowCount;
@@ -1815,8 +1826,12 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 
 		/* done this minipage */
 		blkdirscan->mpinfo = NULL;
-		blkdirscan->mpentryi = 0;
+		blkdirscan->mpentryi = InvalidEntryNum;
 	}
+
+out:
+	/* set the result of minipage entry lookup */
+	blkdir->cached_mpentry_num = blkdirscan->mpentryi;
 
 	return rownum;
 }

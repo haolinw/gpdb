@@ -782,6 +782,11 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	AOTupleIdInit(&aotid, segno, rownum);
 
 	ExecClearTuple(slot);
+
+	/* ensure the target minipage entry was stored in fetch descriptor */
+	Assert(scan->aocsfetch->blockDirectory.minipages == scan->blkdirscan->mpinfo);
+	Assert(scan->aocsfetch->blockDirectory.cached_mpentry_num != InvalidEntryNum);
+
 	/* fetch the target tuple */
 	if(!aocs_fetch(scan->aocsfetch, &aotid, slot))
 		return false;
