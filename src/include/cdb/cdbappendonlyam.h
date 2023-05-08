@@ -233,8 +233,19 @@ typedef struct AppendOnlyScanDescData
 	 * Only used by `analyze`
 	 */
 	int64				cur_seg_rows_scanned;
-	int64				nextrow;
+	/*
+	 * targrow: the output of the Row-based sampler (Alogrithm S), denotes a
+	 * rownumber in the flattened row number space that is the target of a sample,
+	 * which starts from 0.
+	 * In other words, if we have seg0 rownums: [1, 100], seg1 rownums: [1, 200]
+	 * If targrow = 150, then we are referring to seg1's rownum=51.
+	 */
 	int64				targrow;
+	/*
+	 * nextrow: pointing to the next starting row which is used to check
+	 * the distance to `targrow`
+	 */
+	int64				nextrow;
 	int64				totalrows;
 	int64				totaldeadrows;
 	AOBlkDirScan		blkdirscan;
