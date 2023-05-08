@@ -164,8 +164,20 @@ typedef struct AOCSScanDescData
 	/*
 	 * Only used by `analyze`
 	 */
-	int64			nextrow; /* initialize to -1 */
+
+	/*
+	 * targrow: the output of the Row-based sampler (Alogrithm S), denotes a
+	 * rownumber in the flattened row number space that is the target of a sample,
+	 * which starts from 0.
+	 * In other words, if we have seg0 rownums: [1, 100], seg1 rownums: [1, 200]
+	 * If targrow = 150, then we are referring to seg1's rownum=51.
+	 */
 	int64			targrow;
+	/*
+	 * nextrow: pointing to the next starting row which is used to check
+	 * the distance to `targrow`
+	 */
+	int64			nextrow;
 	int64			totalrows;
 	int64			totaldeadrows;
 	AOBlkDirScan	blkdirscan;
@@ -350,7 +362,6 @@ extern AOCSScanDesc aocs_beginrangescan(Relation relation, Snapshot snapshot,
 extern void aocs_rescan(AOCSScanDesc scan);
 extern void aocs_endscan(AOCSScanDesc scan);
 
-extern void aocs_initscan(AOCSScanDesc scan, TupleDesc tupdesc);
 extern bool aocs_getsegment(AOCSScanDesc scan, int64 targrow);
 extern bool aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot);
 extern bool aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow,
@@ -405,6 +416,7 @@ extern void aocs_addcol_emptyvpe(
 		int32 nseg, int num_newcols);
 extern void aocs_addcol_setfirstrownum(AOCSAddColumnDesc desc,
 		int64 firstRowNum);
+extern bool aocs_get_target_tuple(AOCSScanDesc aoscan, int64 targrow, TupleTableSlot *slot);
 extern bool aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot);
 
 extern void aoco_dml_init(Relation relation);

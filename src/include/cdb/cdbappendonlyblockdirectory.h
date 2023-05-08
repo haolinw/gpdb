@@ -181,13 +181,16 @@ typedef struct AOFetchSegmentFile
 	int64 logicalEof;
 } AOFetchSegmentFile;
 
+/*
+ * Tracks block directory scan state for block-directory based ANALYZE.
+ */
 typedef struct AOBlkDirScanData
 {
 	AppendOnlyBlockDirectory	*blkdir;
     MinipagePerColumnGroup		*mpinfo;
 	SysScanDesc					sysscan;
 	int							segno;
-	int							colgroup;
+	int							colgroupno;
 	int							mpentryi;
 } AOBlkDirScanData, *AOBlkDirScan;
 
@@ -207,10 +210,10 @@ extern bool AppendOnlyBlockDirectory_GetEntry(
 	AOTupleId 						*aoTupleId,
 	int                             columnGroupNo,
 	AppendOnlyBlockDirectoryEntry	*directoryEntry);
-extern int64 AppendOnlyBlockDirectory_GetRowNum(
+extern int64 AOBlkDirScan_GetRowNum(
 	AOBlkDirScan					blkdirscan,
 	int								targsegno,
-	int								colgroup,
+	int								colgroupno,
 	int64							targrow,
 	int64							*startrow);
 extern bool AppendOnlyBlockDirectory_CoversTuple(
@@ -234,9 +237,6 @@ extern void AppendOnlyBlockDirectory_Init_forSearch(
 	int numColumnGroups,
 	bool isAOCol,
 	bool *proj);
-extern void AppendOnlyBlockDirectory_Init_forSearch_InSequence(
-	AOBlkDirScan blkdirscan,
-	AppendOnlyBlockDirectory *blkdir);
 extern void AppendOnlyBlockDirectory_Init_forUniqueChecks(AppendOnlyBlockDirectory *blockDirectory,
 														  Relation aoRel,
 														  int numColumnGroups,
@@ -264,8 +264,6 @@ extern void AppendOnlyBlockDirectory_End_forInsert(
 	AppendOnlyBlockDirectory *blockDirectory);
 extern void AppendOnlyBlockDirectory_End_forSearch(
 	AppendOnlyBlockDirectory *blockDirectory);
-extern void AppendOnlyBlockDirectory_End_forSearch_InSequence(
-	AOBlkDirScan seqscan);
 extern void AppendOnlyBlockDirectory_End_addCol(
 	AppendOnlyBlockDirectory *blockDirectory);
 extern void AppendOnlyBlockDirectory_DeleteSegmentFile(
@@ -354,6 +352,41 @@ copy_out_minipage(MinipagePerColumnGroup *minipageInfo,
 	Assert(minipageInfo->minipage->nEntry <= NUM_MINIPAGE_ENTRIES);
 
 	minipageInfo->numMinipageEntries = minipageInfo->minipage->nEntry;
+}
+
+static inline void
+AOBlkDirScan_Init(AOBlkDirScan blkdirscan,
+				  AppendOnlyBlockDirectory *blkdir)
+{
+	blkdirscan->blkdir = blkdir;
+	blkdirscan->sysscan = NULL;
+	blkdirscan->segno = -1;
+	blkdirscan->colgroupno = 0;
+	blkdirscan->mpinfo = NULL;
+	blkdirscan->mpentryi = InvalidEntryNum;
+}
+
+/* should be called before fetch_finish() */
+static inline void
+AOBlkDirScan_Finish(AOBlkDirScan blkdirscan)
+{
+	/*
+	 * Make sure blkdir hasn't been destroyed by fetch_finish(),
+	 * or systable_endscan_ordered() will be crashed for sysscan
+	 * is holding blkdir relation which is freed.
+	 */
+	Assert(blkdirscan->blkdir != NULL);
+
+	if (blkdirscan->sysscan != NULL)
+	{
+		systable_endscan_ordered(blkdirscan->sysscan);
+		blkdirscan->sysscan = NULL;
+	}
+	blkdirscan->segno = -1;
+	blkdirscan->colgroupno = 0;
+	blkdirscan->mpinfo = NULL;
+	blkdirscan->mpentryi = InvalidEntryNum;
+	blkdirscan->blkdir = NULL;
 }
 
 #endif
