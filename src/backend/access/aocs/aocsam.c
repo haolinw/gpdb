@@ -299,7 +299,7 @@ close_ds_write(DatumStreamWrite **ds, int nvp)
 }
 
 static void
-initscan(AOCSScanDesc scan)
+initscan_with_colinfo(AOCSScanDesc scan)
 {
 	MemoryContext	oldCtx;
 	AttrNumber		natts;
@@ -338,21 +338,6 @@ initscan(AOCSScanDesc scan)
 	scan->totalBytesRead = 0;
 
 	pgstat_count_heap_scan(scan->rs_base.rs_rd);
-}
-
-/*
- * init scan with TupleDesc
- */
-void
-aocs_initscan(AOCSScanDesc scan, TupleDesc tupdesc)
-{
-	if (scan->columnScanInfo.relationTupleDesc == NULL)
-	{
-		scan->columnScanInfo.relationTupleDesc = tupdesc;
-		/* Pin it! ... and of course release it upon destruction / rescan */
-		PinTupleDesc(scan->columnScanInfo.relationTupleDesc);
-		initscan(scan);
-	}
 }
 
 static int
@@ -462,14 +447,13 @@ aocs_blkdirscan_init(AOCSScanDesc scan)
 	}
 
 	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
-	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
-													   &scan->aocsfetch->blockDirectory);
+	AOBlkDirScan_Init(scan->blkdirscan, &scan->aocsfetch->blockDirectory);
 }
 
 static void
 aocs_blkdirscan_finish(AOCSScanDesc scan)
 {
-	AppendOnlyBlockDirectory_End_forSearch_InSequence(scan->blkdirscan);
+	AOBlkDirScan_Finish(scan->blkdirscan);
 	pfree(scan->blkdirscan);
 	scan->blkdirscan = NULL;
 
@@ -659,7 +643,7 @@ aocs_rescan(AOCSScanDesc scan)
 	close_cur_scan_seg(scan);
 	if (scan->columnScanInfo.ds)
 		close_ds_read(scan->columnScanInfo.ds, scan->columnScanInfo.relationTupleDesc->natts);
-	initscan(scan);
+	initscan_with_colinfo(scan);
 }
 
 void
@@ -711,7 +695,7 @@ aocs_endscan(AOCSScanDesc scan)
 }
 
 static int
-aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow, int *segidx)
+aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 {
 	int64 rowcount;
 
@@ -727,13 +711,11 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow, int *segidx)
 		if (scan->nextrow + rowcount - 1 >= targrow)
 		{
 			/* found the target segment */
-			if (segidx != NULL)
-				*segidx = i;
-
-			return scan->seginfo[i]->segno;
+			return i;
 		}
 
 		scan->nextrow += rowcount;
+		scan->cur_seg_rows_scanned = 0;
 		/* continue next segment */
 	}
 
@@ -743,7 +725,7 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow, int *segidx)
 bool
 aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
-	int segno;
+	int segno, segidx;
 	int64 rownum = -1;
 	AOTupleId aotid;
 	int ncols = scan->columnScanInfo.relationTupleDesc->natts;
@@ -751,29 +733,34 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	Assert(scan->blkdirscan != NULL);
 
 	/* locate the target segment */
-	segno = aocs_locate_target_segment(scan, targrow, NULL);
-	if (segno < 0)
+	segidx = aocs_locate_target_segment(scan, targrow);
+	if (segidx < 0)
 		return false;
+
+	/* next starting position in locating segfile */
+	scan->cur_seg = segidx;
+
+	segno = scan->seginfo[segidx]->segno;
+	Assert(segno >= 0);
 
 	/* locate the target row by seqscan block directory */
 	for (int col = 0; col < ncols; col++)
 	{
 		/* reset the startrow for every column */
-		int64 startrow = scan->nextrow;
+		int64 startrow = scan->nextrow + scan->cur_seg_rows_scanned;
 
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
 
-		rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
-													segno,
-													col,
-													targrow,
-													&startrow);
+		rownum = AOBlkDirScan_GetRowNum(scan->blkdirscan,
+										segno,
+										col,
+										targrow,
+										&startrow);
 		if (rownum < 0)
 			continue;
 
-		/* finally, set the nextrow to the proper position */
-		scan->nextrow = startrow;
+		scan->cur_seg_rows_scanned = startrow - scan->nextrow;
 		break;
 	}
 
@@ -827,15 +814,17 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 	}
 
 	/* locate the target segment */
-	segno = aocs_locate_target_segment(scan, targrow, &segidx);
-	if (segno >= 0)
+	segidx = aocs_locate_target_segment(scan, targrow);
+	if (segidx >= 0)
 	{
+		segno = scan->seginfo[segidx]->segno;
+		Assert(segno >= 0);
 		/* adjust cur_seg to fit for open_next_scan_seg() */
 		scan->cur_seg = segidx - 1;
 		if (open_next_scan_seg(scan) >= 0)
 		{
-			/* new segment, reset cur_seg_rows_scanned */
-			scan->cur_seg_rows_scanned = 0;
+			/* new segment, make sure cur_seg_rows_scanned was reset */
+			Assert(scan->cur_seg_rows_scanned == 0);
 			return true;
 		}
 
@@ -902,6 +891,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				startrow += rowcount; /* skip scanning remaining rows */
 		}
 
+		/*
+		 * Keep reading block headers until we find the block containing
+		 * the target row.
+		 */
 		while (true)
 		{
 			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
@@ -941,10 +934,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* continue next block */
 			}
 			else
-			{
-				/* should not reach here */
-				elog(ERROR, "Unexpected result was returned when getting AOCO block info.");
-			}
+				pg_unreachable(); /* unreachable code */
 		}
 	}
 
@@ -983,9 +973,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	Assert(startrow <= endrow);
 
 	rowstoscan = endrow - startrow + 1;
-	/* nrows = blockRowsProcessed + rowstoscan */
 	nrows = ds->blockRowsProcessed + rowstoscan;
-	/* rowNum = blockFirstRowNum + nrows - 1 */
 	rownum = ds->blockFirstRowNum + nrows - 1;
 
 	/* form the target tuple TID */
@@ -1017,6 +1005,35 @@ out:
 }
 
 bool
+aocs_get_target_tuple(AOCSScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
+{
+	if (aoscan->columnScanInfo.relationTupleDesc == NULL)
+	{
+		aoscan->columnScanInfo.relationTupleDesc = slot->tts_tupleDescriptor;
+		/* Pin it! ... and of course release it upon destruction / rescan */
+		PinTupleDesc(aoscan->columnScanInfo.relationTupleDesc);
+		initscan_with_colinfo(aoscan);
+	}
+
+	if (aoscan->blkdirscan != NULL)
+		return aocs_blkdirscan_get_target_tuple(aoscan, targrow, slot);
+
+	if (!aocs_getsegment(aoscan, targrow))
+	{
+		/* all done */
+		ExecClearTuple(slot);
+		return false;
+	}
+
+	/*
+	 * Unlike AO_ROW, AO_COLUMN may have different varblocks
+	 * for different columns, so we get per-column tuple directly
+	 * on the way of walking per-column varblock.
+	 */
+	return aocs_gettuple(aoscan, targrow, slot);
+}
+
+bool
 aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot)
 {
 	Datum	   *d = slot->tts_values;
@@ -1033,7 +1050,13 @@ aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot)
 	/* should not be in ANALYZE */
 	Assert((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) == 0);
 
-	aocs_initscan(scan, slot->tts_tupleDescriptor);
+	if (scan->columnScanInfo.relationTupleDesc == NULL)
+	{
+		scan->columnScanInfo.relationTupleDesc = slot->tts_tupleDescriptor;
+		/* Pin it! ... and of course release it upon destruction / rescan */
+		PinTupleDesc(scan->columnScanInfo.relationTupleDesc);
+		initscan_with_colinfo(scan);
+	}
 
 	natts = slot->tts_tupleDescriptor->natts;
 	Assert(natts <= scan->columnScanInfo.relationTupleDesc->natts);

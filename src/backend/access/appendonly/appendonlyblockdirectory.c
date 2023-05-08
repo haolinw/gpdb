@@ -225,18 +225,6 @@ AppendOnlyBlockDirectory_Init_forSearch(
 	init_internal(blockDirectory);
 }
 
-void
-AppendOnlyBlockDirectory_Init_forSearch_InSequence(AOBlkDirScan blkdirscan,
-												   AppendOnlyBlockDirectory *blkdir)
-{
-	blkdirscan->blkdir = blkdir;
-	blkdirscan->sysscan = NULL;
-	blkdirscan->segno = -1;
-	blkdirscan->colgroup = 0;
-	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = InvalidEntryNum;
-}
-
 /*
  * AppendOnlyBlockDirectory_Init_forUniqueChecks
  *
@@ -1687,29 +1675,6 @@ AppendOnlyBlockDirectory_End_forSearch(
 	MemoryContextDelete(blockDirectory->memoryContext);
 }
 
-/* should be called before fetch_finish() */
-void
-AppendOnlyBlockDirectory_End_forSearch_InSequence(AOBlkDirScan blkdirscan)
-{
-	/*
-	 * Make sure blkdir hasn't been destroyed by fetch_finish(),
-	 * or systable_endscan_ordered() will be crashed for sysscan
-	 * is holding blkdir relation which is freed.
-	 */
-	Assert(blkdirscan->blkdir != NULL);
-
-	if (blkdirscan->sysscan != NULL)
-	{
-		systable_endscan_ordered(blkdirscan->sysscan);
-		blkdirscan->sysscan = NULL;
-	}
-	blkdirscan->segno = -1;
-	blkdirscan->colgroup = 0;
-	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = InvalidEntryNum;
-	blkdirscan->blkdir = NULL;
-}
-
 void
 AppendOnlyBlockDirectory_End_writeCols(
 	AppendOnlyBlockDirectory *blockDirectory, List *newvals)
@@ -1799,11 +1764,11 @@ AppendOnlyBlockDirectory_End_forIndexOnlyScan(AppendOnlyBlockDirectory *blockDir
 }
 
 int64
-AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
-								   int targsegno,
-								   int colgroup,
-								   int64 targrow,
-								   int64 *startrow)
+AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
+					   int targsegno,
+					   int colgroupno,
+					   int64 targrow,
+					   int64 *startrow)
 {
 	HeapTuple tuple;
 	TupleDesc tupdesc;
@@ -1813,7 +1778,7 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 	Assert(targsegno >= 0);
 	Assert(blkdir != NULL);
 
-	if (blkdirscan->segno != targsegno || blkdirscan->colgroup != colgroup)
+	if (blkdirscan->segno != targsegno || blkdirscan->colgroupno != colgroupno)
 	{
 		if (blkdirscan->sysscan != NULL)
 			systable_endscan_ordered(blkdirscan->sysscan);
@@ -1821,16 +1786,16 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 		ScanKeyData	scankeys[2];
 		
 		ScanKeyInit(&scankeys[0],
-					1,				/* segno */
+					Anum_pg_aoblkdir_segno,
 					BTEqualStrategyNumber,
 					F_INT4EQ,
 					Int32GetDatum(targsegno));
 		
 		ScanKeyInit(&scankeys[1],
-					2,				/* colgroup */
+					Anum_pg_aoblkdir_columngroupno,
 					BTEqualStrategyNumber,
 					F_INT4EQ,
-					Int32GetDatum(colgroup));
+					Int32GetDatum(colgroupno));
 		
 		blkdirscan->sysscan = systable_beginscan_ordered(blkdir->blkdirRel,
 														 blkdir->blkdirIdx,
@@ -1838,7 +1803,7 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 														 2, /* nkeys */
 														 scankeys);
 		blkdirscan->segno = targsegno;
-		blkdirscan->colgroup = colgroup;
+		blkdirscan->colgroupno = colgroupno;
 	}
 
 	while (true)
@@ -1849,18 +1814,18 @@ AppendOnlyBlockDirectory_GetRowNum(AOBlkDirScan blkdirscan,
 			if (HeapTupleIsValid(tuple))
 			{
 				tupdesc = RelationGetDescr(blkdir->blkdirRel);
-				extract_minipage(blkdir, tuple, tupdesc, colgroup, false);
+				extract_minipage(blkdir, tuple, tupdesc, colgroupno, false);
 				/* new minipage */
-				blkdirscan->mpinfo = &blkdir->minipages[colgroup];
+				blkdirscan->mpinfo = &blkdir->minipages[colgroupno];
 				blkdirscan->mpentryi = 0;
 			}
 			else
 			{	
-				/* done this < segno, colgroup > */
+				/* done this < segno, colgroupno > */
 				systable_endscan_ordered(blkdirscan->sysscan);
 				blkdirscan->sysscan = NULL;
 				blkdirscan->segno = -1;
-				blkdirscan->colgroup = 0;
+				blkdirscan->colgroupno = 0;
 				Assert(blkdirscan->mpentryi == InvalidEntryNum);
 				goto out;
 			}

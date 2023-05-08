@@ -1077,7 +1077,7 @@ getNextBlock(AppendOnlyScanDesc scan)
 }
 
 static int
-appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow, int *segidx)
+appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow)
 {
 	int64 rowcount;
 
@@ -1090,10 +1090,7 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow, int *se
 		if (scan->nextrow + rowcount - 1 >= targrow)
 		{
 			/* found the target segment */
-			if (segidx != NULL)
-				*segidx = i;
-
-			return scan->aos_segfile_arr[i]->segno;
+			return i;
 		}
 
 		scan->nextrow += rowcount;
@@ -1141,6 +1138,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 
 		/* get current segno */
 		segno = scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->segno;
+		Assert(segno >= 0);
 	}
 
 	if (!scan->aos_need_new_segfile)
@@ -1148,9 +1146,11 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 		return segno;
 
 	/* locate the target segment */
-	segno = appendonly_locate_target_segment(scan, targrow, &segidx);
-	if (segno >= 0)
+	segidx = appendonly_locate_target_segment(scan, targrow);
+	if (segidx >= 0)
 	{
+		segno = scan->aos_segfile_arr[segidx]->segno;
+		Assert(segno >= 0);
 		/* set position to the target segfile */
 		scan->aos_segfiles_processed = segidx;
 		if (SetNextFileSegForRead(scan))
@@ -1209,6 +1209,10 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 	if (!scan->needNextBuffer)
 		return true;
 
+	/*
+	 * Keep reading block headers until we find the block containing
+	 * the target row.
+	 */
 	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
 	{
 		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
@@ -1236,10 +1240,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 		/* continue next block */
 	}
 
-	/* done reading the file */
-	CloseScannedFileSeg(scan);
-
-	elog(ERROR, "Unexpected result was returned when getting AO block info.");
+	pg_unreachable(); /* unreachable code */
 
 	return false;
 }
@@ -1247,23 +1248,30 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 static bool
 appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
-	int segno;
+	int segno = -1;
+	int segidx;
 	int64 rownum;
 	AOTupleId aotid;
 
 	Assert(scan->blkdirscan != NULL);
 
 	/* locate the target segment */
-	segno = appendonly_locate_target_segment(scan, targrow, NULL);
-	if (segno < 0)
+	segidx = appendonly_locate_target_segment(scan, targrow);
+	if (segidx < 0)
 		return false;
 
+	// /* next starting position in locating segfile */
+	// scan->aos_segfiles_processed = segidx;
+
+	segno = scan->aos_segfile_arr[segidx]->segno;
+	Assert(segno >= 0);
+
 	/* locate the target row by seqscan block directory */
-	rownum = AppendOnlyBlockDirectory_GetRowNum(scan->blkdirscan,
-												segno,
-												0,
-												targrow,
-												&scan->nextrow);
+	rownum = AOBlkDirScan_GetRowNum(scan->blkdirscan,
+									segno,
+									0,
+									targrow,
+									&scan->nextrow);
 	if (rownum < 0)
 		return false;
 
@@ -1312,9 +1320,7 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 		return false;
 
 	rowstoscan = targrow - aoscan->nextrow + 1;
-	/* nrows = blockRowsProcessed + rowstoscan */
 	nrows = aoscan->executorReadBlock.blockRowsProcessed + rowstoscan;
-	/* rowNum = blockFirstRowNum + nrows - 1 */
 	rownum = varblock->blockFirstRowNum + nrows - 1;
 
 	/* form the target tuple TID */
@@ -1549,14 +1555,13 @@ appendonly_blkdirscan_init(AppendOnlyScanDesc scan)
 											  scan->appendOnlyMetaDataSnapshot);
 
 	scan->blkdirscan = palloc0(sizeof(AOBlkDirScanData));
-	AppendOnlyBlockDirectory_Init_forSearch_InSequence(scan->blkdirscan,
-													   &scan->aofetch->blockDirectory);
+	AOBlkDirScan_Init(scan->blkdirscan, &scan->aofetch->blockDirectory);
 }
 
 static void
 appendonly_blkdirscan_finish(AppendOnlyScanDesc scan)
 {
-	AppendOnlyBlockDirectory_End_forSearch_InSequence(scan->blkdirscan);
+	AOBlkDirScan_Finish(scan->blkdirscan);
 	pfree(scan->blkdirscan);
 	scan->blkdirscan = NULL;
 

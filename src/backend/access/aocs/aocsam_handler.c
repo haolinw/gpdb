@@ -689,32 +689,6 @@ aoco_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSlot *sl
 	return false;
 }
 
-static bool
-aoco_get_target_tuple(AOCSScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
-{
-	aocs_initscan(aoscan, slot->tts_tupleDescriptor);
-
-	if (aoscan->blkdirscan != NULL)
-		return aocs_blkdirscan_get_target_tuple(aoscan, targrow, slot);
-
-	if (!aocs_getsegment(aoscan, targrow))
-	{
-		/* all done */
-		ExecClearTuple(slot);
-		return false;
-	}
-
-	/*
-	 * Unlike AO_ROW, AO_COLUMN may have different varblocks
-	 * for different columns, so we get per-column tuple directly
-	 * on the way of walking per-column varblock.
-	 */
-	if (!aocs_gettuple(aoscan, targrow, slot))
-		return false;
-	
-	return true;
-}
-
 static Size
 aoco_parallelscan_estimate(Relation rel)
 {
@@ -1669,7 +1643,7 @@ aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 
 		vacuum_delay_point();
 
-		if (aoco_get_target_tuple(aocoscan, aocoscan->targrow, slot))
+		if (aocs_get_target_tuple(aocoscan, aocoscan->targrow, slot))
 		{
 			rows[numrows++] = ExecCopySlotHeapTuple(slot);
 			liverows++;
