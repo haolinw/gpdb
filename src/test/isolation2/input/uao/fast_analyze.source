@@ -1,0 +1,61 @@
+--
+-- Test AO/CO Fast Analyze Feature
+--
+-- This is intended to guard fast analyze function to work
+-- with multi-segfiles tables under concurrent inserts.
+--
+
+create table analyze_@amname@ (id int, a int, b inet, c inet) using @amname@ with (compresstype=zlib, compresslevel=3);
+
+insert into analyze_@amname@ select 2, i, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' ||
+  (i%255)::text))::inet, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' ||
+  (i%255)::text))::inet from generate_series(1,30000)i;
+
+insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+-- test ANALYZE after concurrent inserts commit
+
+1: begin;
+1: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+2: begin;
+2: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+3: begin;
+3: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+4: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+5: analyze analyze_@amname@;
+
+1: commit;
+2: commit;
+3: abort;
+
+1: analyze analyze_@amname@;
+
+-- test aoblkdir based ANALYZE
+
+create index on analyze_@amname@(id);
+
+1: begin;
+1: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+2: begin;
+2: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+3: begin;
+3: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+4: insert into analyze_@amname@ select * from analyze_@amname@ limit 1000;
+
+5: analyze analyze_@amname@;
+
+1: commit;
+2: commit;
+3: abort;
+
+1: analyze analyze_@amname@;
+
+drop table analyze_@amname@;

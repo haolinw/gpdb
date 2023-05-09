@@ -712,6 +712,7 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 			return i;
 		}
 
+		/* continue next segment */
 		scan->nextrow += rowcount;
 		scan->segrowsprocessed = 0;
 	}
@@ -724,6 +725,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 {
 	int segno, segidx;
 	int64 rownum = -1;
+	int64 rowsprocessed;
 	AOTupleId aotid;
 	int ncols = scan->columnScanInfo.relationTupleDesc->natts;
 
@@ -743,8 +745,15 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	/* locate the target row by seqscan block directory */
 	for (int col = 0; col < ncols; col++)
 	{
-		/* reset the startrow for every column */
-		int64 startrow = scan->nextrow + scan->segrowsprocessed;
+		/*
+		 * "nextrow" should be always pointing to the first row of
+		 * a new segfile, only locate_target_segment could update
+		 * its value.
+		 * 
+		 * "segrowsprocessed" is used for tracking the position of
+		 * processed rows in the current segfile.
+		 */
+		rowsprocessed = scan->nextrow + scan->segrowsprocessed;
 
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
@@ -753,11 +762,11 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 										segno,
 										col,
 										targrow,
-										&startrow);
+										&rowsprocessed);
 		if (rownum < 0)
 			continue;
 
-		scan->segrowsprocessed = startrow - scan->nextrow;
+		scan->segrowsprocessed = rowsprocessed - scan->nextrow;
 		break;
 	}
 
@@ -807,6 +816,7 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 		
 		/* skip scanning remaining rows */
 		scan->nextrow += rowcount;
+		scan->segrowsprocessed = 0;
 		close_cur_scan_seg(scan);
 	}
 
@@ -848,13 +858,15 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
 	bool ret = true;
 	int64 rowcount = -1;
-	int64 rowstoscan;
+	int64 rowstoprocess;
 	bool chkvisimap = true;
 
 	Assert(scan->cur_seg >= 0);
 	Assert(slot != NULL);
 
 	ExecClearTuple(slot);
+
+	rowstoprocess = targrow - scan->nextrow + 1;
 
 	/* read from scan->cur_seg */
 	for (AttrNumber i = 0; i < scan->columnScanInfo.num_proj_atts; i++)
@@ -936,11 +948,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	}
 
 out:
-	/* update rows scanned */
-	rowstoscan = targrow - scan->nextrow + 1;
-	scan->segrowsprocessed += rowstoscan;
 	/* update nextrow position */
 	scan->nextrow = targrow + 1;
+	/* update rows processed */
+	scan->segrowsprocessed += rowstoprocess;
 
 	if (ret)
 	{
@@ -959,7 +970,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	int segno = scan->seginfo[scan->cur_seg]->segno;
 	AOTupleId aotid;
 	bool ret = true;
-	int64 rowstoscan, nrows, rownum;
+	int64 rowstoprocess, nrows, rownum;
 	Datum *values;
 	bool *nulls;
 
@@ -969,8 +980,8 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	Assert(segno >= 0);
 	Assert(startrow <= endrow);
 
-	rowstoscan = endrow - startrow + 1;
-	nrows = ds->blockRowsProcessed + rowstoscan;
+	rowstoprocess = endrow - startrow + 1;
+	nrows = ds->blockRowsProcessed + rowstoprocess;
 	rownum = ds->blockFirstRowNum + nrows - 1;
 
 	/* form the target tuple TID */
@@ -995,8 +1006,8 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
 
 out:
-	/* update rows scanned */
-	ds->blockRowsProcessed += rowstoscan;
+	/* update rows processed */
+	ds->blockRowsProcessed += rowstoprocess;
 
 	return ret;
 }
