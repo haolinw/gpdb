@@ -1094,8 +1094,9 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow)
 			return i;
 		}
 
-		scan->nextrow += rowcount;
 		/* continue next segment */
+		scan->nextrow += rowcount;
+		scan->segrowsprocessed = 0;
 	}
 
 	return -1;
@@ -1108,7 +1109,7 @@ static inline int64
 appendonly_segment_remaining_rows(AppendOnlyScanDesc scan)
 {
 	Assert(scan->aos_segfiles_processed > 0);
-	return (scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount - scan->cur_seg_rows_scanned);
+	return (scan->aos_segfile_arr[scan->aos_segfiles_processed - 1]->total_tupcount - scan->segrowsprocessed);
 }
 
 static int
@@ -1134,6 +1135,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 		{
 			/* skip scanning remaining rows */
 			scan->nextrow += rowcount;
+			scan->segrowsprocessed = 0;
 			CloseScannedFileSeg(scan);
 		}
 
@@ -1152,12 +1154,11 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 	{
 		segno = scan->aos_segfile_arr[segidx]->segno;
 		Assert(segno >= 0);
-		/* set position to the target segfile */
-		scan->aos_segfiles_processed = segidx;
+
 		if (SetNextFileSegForRead(scan))
 		{
-			/* new segment, reset cur_seg_rows_scanned */
-			scan->cur_seg_rows_scanned = 0;
+			Assert(scan->segrowsprocessed == 0);
+			scan->needNextBuffer = true;
 			return segno;
 		}
 
@@ -1187,9 +1188,9 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 	AppendOnlyExecutorReadBlock *readblock = &scan->executorReadBlock;
 	int64 rowcount = -1;
 
-	if (readblock->rowCount <= 0)
+	if (scan->needNextBuffer)
 		/* haven't read block */
-		Assert(scan->needNextBuffer);
+		;
 	else
 	{
 		/* block was read */
@@ -1217,10 +1218,10 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, readblock))
 	{
 		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
-			 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, blockRowsProcessed: %ld, "
+			 "nextrow: %ld, rowcount: %ld, segrowsprocessed: %ld, blockRowsProcessed: %ld, "
 			 "blockRowCount: %d]", targrow, scan->nextrow + rowcount - 1,
 			 scan->nextrow + rowcount - 1 - targrow, scan->nextrow, rowcount,
-			 scan->cur_seg_rows_scanned, scan->executorReadBlock.blockRowsProcessed,
+			 scan->segrowsprocessed, scan->executorReadBlock.blockRowsProcessed,
 			 scan->executorReadBlock.rowCount);
 
 		/* new block, reset blockRowsProcessed */
@@ -1249,9 +1250,8 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow)
 static bool
 appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
-	int segno = -1;
-	int segidx;
-	int64 rownum;
+	int segno, segidx;
+	int64 rownum, rowsprocessed;
 	AOTupleId aotid;
 
 	Assert(scan->blkdirscan != NULL);
@@ -1261,20 +1261,30 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	if (segidx < 0)
 		return false;
 
-	// /* next starting position in locating segfile */
-	// scan->aos_segfiles_processed = segidx;
+	scan->aos_segfiles_processed = segidx;
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
 	Assert(segno >= 0);
 
+	/*
+	 * "nextrow" should be always pointing to the first row of
+	 * a new segfile in blkdir based ANALYZE, only locate_target_segment
+	 * could update its value.
+	 * 
+	 * "segrowsprocessed" is used for tracking the position of
+	 * processed rows in the current segfile.
+	 */
+	rowsprocessed = scan->nextrow + scan->segrowsprocessed;
 	/* locate the target row by seqscan block directory */
 	rownum = AOBlkDirScan_GetRowNum(scan->blkdirscan,
 									segno,
 									0,
 									targrow,
-									&scan->nextrow);
+									&rowsprocessed);
 	if (rownum < 0)
 		return false;
+
+	scan->segrowsprocessed = rowsprocessed - scan->nextrow;
 
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
@@ -1306,7 +1316,7 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 	AppendOnlyExecutorReadBlock *varblock = &aoscan->executorReadBlock;
 	bool ret = true;
 	bool isSnapshotAny = (aoscan->snapshot == SnapshotAny);
-	int64 rowstoscan, nrows, rownum;
+	int64 rowsprocessed, rowstoprocess, nrows, rownum;
 	int segno;
 	AOTupleId aotid;
 
@@ -1317,11 +1327,14 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 	if (segno < 0)
 		return false;
 
+	rowsprocessed = aoscan->nextrow;
+
 	if (!appendonly_getblock(aoscan, targrow))
 		return false;
-
-	rowstoscan = targrow - aoscan->nextrow + 1;
-	nrows = aoscan->executorReadBlock.blockRowsProcessed + rowstoscan;
+	
+	rowsprocessed = aoscan->nextrow - rowsprocessed;
+	rowstoprocess = targrow - aoscan->nextrow + 1;
+	nrows = varblock->blockRowsProcessed + rowstoprocess;
 	rownum = varblock->blockFirstRowNum + nrows - 1;
 
 	/* form the target tuple TID */
@@ -1343,11 +1356,11 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 	}
 
 out:
-	/* update rows scanned */
-	aoscan->cur_seg_rows_scanned += rowstoscan;
-	aoscan->executorReadBlock.blockRowsProcessed += rowstoscan;
 	/* update nextrow position */
 	aoscan->nextrow = targrow + 1;
+	varblock->blockRowsProcessed += rowstoprocess;
+	/* update rows processed */
+	aoscan->segrowsprocessed += (rowsprocessed + rowstoprocess);
 
 	if (ret)
 	{
@@ -1699,7 +1712,7 @@ appendonly_beginrangescan_internal(Relation relation,
 
 	if ((flags & SO_TYPE_ANALYZE) != 0)
 	{
-		scan->cur_seg_rows_scanned = 0;
+		scan->segrowsprocessed = 0;
 		scan->nextrow = 0;
 		scan->targrow = 0;
 		scan->totalrows = 0;
