@@ -331,7 +331,7 @@ initscan_with_colinfo(AOCSScanDesc scan)
 	MemoryContextSwitchTo(oldCtx);
 
 	scan->cur_seg = -1;
-	scan->cur_seg_rows_scanned = 0;
+	scan->segrowsprocessed = 0;
 
 	ItemPointerSet(&scan->cdb_fake_ctid, 0, 0);
 
@@ -713,8 +713,7 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 		}
 
 		scan->nextrow += rowcount;
-		scan->cur_seg_rows_scanned = 0;
-		/* continue next segment */
+		scan->segrowsprocessed = 0;
 	}
 
 	return -1;
@@ -745,7 +744,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	for (int col = 0; col < ncols; col++)
 	{
 		/* reset the startrow for every column */
-		int64 startrow = scan->nextrow + scan->cur_seg_rows_scanned;
+		int64 startrow = scan->nextrow + scan->segrowsprocessed;
 
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
@@ -758,7 +757,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 		if (rownum < 0)
 			continue;
 
-		scan->cur_seg_rows_scanned = startrow - scan->nextrow;
+		scan->segrowsprocessed = startrow - scan->nextrow;
 		break;
 	}
 
@@ -787,7 +786,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 static inline int64
 aocs_segment_remaining_rows(AOCSScanDesc scan)
 {
-	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->cur_seg_rows_scanned);
+	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->segrowsprocessed);
 }
 
 bool
@@ -821,8 +820,8 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 		scan->cur_seg = segidx - 1;
 		if (open_next_scan_seg(scan) >= 0)
 		{
-			/* new segment, make sure cur_seg_rows_scanned was reset */
-			Assert(scan->cur_seg_rows_scanned == 0);
+			/* new segment, make sure segrowsprocessed was reset */
+			Assert(scan->segrowsprocessed == 0);
 			return true;
 		}
 
@@ -896,10 +895,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		while (true)
 		{
 			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
-				 "nextrow: %ld, rowcount: %ld, cur_seg_rows_scanned: %ld, nth: %d, "
+				 "nextrow: %ld, rowcount: %ld, segrowsprocessed: %ld, nth: %d, "
 				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				 startrow+ rowcount - 1 - targrow, startrow, rowcount,
-				 scan->cur_seg_rows_scanned, datumstreamread_nth(ds), ds->blockRowCount,
+				 scan->segrowsprocessed, datumstreamread_nth(ds), ds->blockRowCount,
 				 ds->blockRowsProcessed);
 
 			if (datumstreamread_block_info(ds))
@@ -939,7 +938,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 out:
 	/* update rows scanned */
 	rowstoscan = targrow - scan->nextrow + 1;
-	scan->cur_seg_rows_scanned += rowstoscan;
+	scan->segrowsprocessed += rowstoscan;
 	/* update nextrow position */
 	scan->nextrow = targrow + 1;
 
@@ -1075,7 +1074,7 @@ ReadNext:
 				scan->cur_seg = -1;
 				return false;
 			}
-			scan->cur_seg_rows_scanned = 0;
+			scan->segrowsprocessed = 0;
 		}
 
 		Assert(scan->cur_seg >= 0);
@@ -1123,10 +1122,10 @@ ReadNext:
 			}
 		}
 
-		scan->cur_seg_rows_scanned++;
+		scan->segrowsprocessed++;
 		if (rowNum == INT64CONST(-1))
 		{
-			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->cur_seg_rows_scanned);
+			AOTupleIdInit(&aoTupleId, curseginfo->segno, scan->segrowsprocessed);
 		}
 		else
 		{

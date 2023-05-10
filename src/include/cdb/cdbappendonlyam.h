@@ -230,7 +230,7 @@ typedef struct AppendOnlyScanDescData
 	AppendOnlyVisimap visibilityMap;
 
 	/*
-	 * Only used by `analyze`
+	 * used by `analyze`
 	 */
 	int64				cur_seg_rows_scanned;
 	/*
