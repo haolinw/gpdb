@@ -794,59 +794,44 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	return true;
 }
 
-static inline int64
-aocs_segment_remaining_rows(AOCSScanDesc scan)
-{
-	return (scan->seginfo[scan->cur_seg]->total_tupcount - scan->segrowsprocessed);
-}
-
-bool
+static int
 aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 {
 	int segno, segidx;
-	int64 rowcount;
-
-	if (scan->cur_seg >= 0)
-	{
-		/* segment file is opened */
-		rowcount = aocs_segment_remaining_rows(scan);
-		Assert(rowcount >= 0);
-
-		if (scan->nextrow + rowcount - 1 >= targrow)
-			/* haven't finished scanning on current segment */
-			return true;
-		
-		/* skip scanning remaining rows */
-		scan->nextrow += rowcount;
-		scan->segrowsprocessed = 0;
-		close_cur_scan_seg(scan);
-	}
 
 	/* locate the target segment */
 	segidx = aocs_locate_target_segment(scan, targrow);
-	if (segidx >= 0)
+	if (segidx < 0)
 	{
-		segno = scan->seginfo[segidx]->segno;
-		Assert(segno >= 0);
+		/* done reading all segments */
+		close_cur_scan_seg(scan);
+		scan->cur_seg = -1;
+		return -1;
+	}
+
+	segno = scan->seginfo[segidx]->segno;
+	Assert(segno >= 0);
+
+	if (segidx > scan->cur_seg)
+	{
+		close_cur_scan_seg(scan);
 		/* adjust cur_seg to fit for open_next_scan_seg() */
 		scan->cur_seg = segidx - 1;
 		if (open_next_scan_seg(scan) >= 0)
 		{
 			/* new segment, make sure segrowsprocessed was reset */
 			Assert(scan->segrowsprocessed == 0);
-			return true;
 		}
-
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
-				 		segno, RelationGetRelationName(scan->rs_base.rs_rd))));
+		else
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
+							segno, RelationGetRelationName(scan->rs_base.rs_rd))));
+		}
 	}
-
-	/* done reading all segments */
-	close_cur_scan_seg(scan);
-	scan->cur_seg = -1;
-	return false;
+	
+	return segno;
 }
 
 static inline int
@@ -875,7 +860,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	{
 		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
-		int64 startrow = scan->nextrow;
+		int64 startrow = scan->nextrow + scan->segrowsprocessed;
 
 		if (ds->blockRowCount <= 0)
 			; /* haven't read block */
@@ -950,10 +935,8 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	}
 
 out:
-	/* update nextrow position */
-	scan->nextrow = targrow + 1;
 	/* update rows processed */
-	scan->segrowsprocessed += rowstoprocess;
+	scan->segrowsprocessed = rowstoprocess;
 
 	if (ret)
 	{
@@ -1028,7 +1011,7 @@ aocs_get_target_tuple(AOCSScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
 	if (aoscan->blkdirscan != NULL)
 		return aocs_blkdirscan_get_target_tuple(aoscan, targrow, slot);
 
-	if (!aocs_getsegment(aoscan, targrow))
+	if (aocs_getsegment(aoscan, targrow) < 0)
 	{
 		/* all done */
 		ExecClearTuple(slot);
