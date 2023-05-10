@@ -369,7 +369,7 @@ extern AOCSScanDesc aocs_beginrangescan(Relation relation, Snapshot snapshot,
 extern void aocs_rescan(AOCSScanDesc scan);
 extern void aocs_endscan(AOCSScanDesc scan);
 
-extern bool aocs_getsegment(AOCSScanDesc scan, int64 targrow);
+// extern bool aocs_getsegment(AOCSScanDesc scan, int64 targrow);
 extern bool aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot);
 extern bool aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow,
 								 int64 endrow, bool chkvisimap, TupleTableSlot *slot);
