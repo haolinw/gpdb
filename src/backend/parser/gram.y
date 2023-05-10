@@ -820,7 +820,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 	HASH HOST
 
-	IGNORE_P INCLUSIVE INITPLAN
+	IGNORE_P INCLUSIVE INITPLAN IO_LIMIT
 
 	LIST LOG_P
 
@@ -1626,6 +1626,10 @@ OptResourceGroupElem:
 			| MIN_COST SignedIconst
 				{
 					$$ = makeDefElem("min_cost", (Node *) makeInteger($2), @1);
+				}
+			| IO_LIMIT Sconst
+				{
+					$$ = makeDefElem("io_limit", (Node *) makeString($2), @1);
 				}
 		;
 
@@ -18140,6 +18144,7 @@ unreserved_keyword:
 			| INSERT
 			| INSTEAD
 			| INVOKER
+			| IO_LIMIT
 			| ISOLATION
 			| KEY
 			| LABEL

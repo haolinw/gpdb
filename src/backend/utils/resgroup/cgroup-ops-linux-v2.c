@@ -101,6 +101,12 @@ static const PermItem perm_items_cpuset[] =
 	{ CGROUP_COMPONENT_UNKNOWN, NULL, 0 }
 };
 
+static const PermItem perm_items_io[] =
+{
+	{ CGROUP_COMPONENT_PLAIN, "io.max", R_OK | W_OK },
+	{ CGROUP_COMPONENT_UNKNOWN, NULL, 0 }
+};
+
 /*
  * just for cpuset check, same as the cpuset Permlist in permlists
  */
@@ -129,6 +135,8 @@ static const PermList permlists[] =
 	{ perm_items_cpuset, CGROUP_CPUSET_IS_OPTIONAL,
 		&gp_resource_group_enable_cgroup_cpuset},
 
+	{ perm_items_io, false, NULL},
+
 	{ NULL, false, NULL }
 };
 
@@ -148,6 +156,7 @@ static int64 getcpuusage_v2(Oid group);
 static void getcpuset_v2(Oid group, char *cpuset, int len);
 static void setcpuset_v2(Oid group, const char *cpuset);
 static float convertcpuusage_v2(int64 usage, int64 duration);
+static void setio_v2(Oid group, const char *io_max);
 
 /*
  * Dump component dir to the log.
@@ -175,6 +184,7 @@ init_subtree_control(void)
 	writeStr(CGROUP_ROOT_ID, BASEDIR_GPDB, component, "cgroup.subtree_control", "+cpu");
 	writeStr(CGROUP_ROOT_ID, BASEDIR_GPDB, component, "cgroup.subtree_control", "+memory");
 	writeStr(CGROUP_ROOT_ID, BASEDIR_GPDB, component, "cgroup.subtree_control", "+pids");
+	writeStr(CGROUP_ROOT_ID, BASEDIR_GPDB, component, "cgroup.subtree_control", "+io");
 }
 
 /*
@@ -800,6 +810,13 @@ getmemoryusage_v2(Oid group)
 	return readInt64(group, BASEDIR_GPDB, component, "memory.current");
 }
 
+static void
+setio_v2(Oid group, const char *io_max)
+{
+	CGroupComponentType component = CGROUP_COMPONENT_PLAIN;
+	writeStr(group, BASEDIR_GPDB, component, "io.max", io_max);
+}
+
 static CGroupOpsRoutine cGroupOpsRoutineV2 = {
 		.getcgroupname = getcgroupname_v2,
 		.probecgroup = probecgroup_v2,
@@ -823,7 +840,9 @@ static CGroupOpsRoutine cGroupOpsRoutineV2 = {
 
 		.convertcpuusage = convertcpuusage_v2,
 
-		.getmemoryusage = getmemoryusage_v2
+		.getmemoryusage = getmemoryusage_v2,
+
+		.setio = setio_v2
 };
 
 CGroupOpsRoutine *get_group_routine_v2(void)

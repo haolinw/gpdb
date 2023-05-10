@@ -71,6 +71,14 @@ typedef struct ResGroupCaps
 	ResGroupCap		cpuSoftPriority;
 	ResGroupCap		memory_limit;
 	volatile ResGroupCap	min_cost;
+
+	/*
+	 * io_limit and ioTblspcConfigs are local pointers,
+	 * do not use it for cross MemoryContext.
+	 */
+	List			*ioTblspcConfigs;
+	char			*io_limit;
+
 	char			cpuset[MaxCpuSetLength];
 } ResGroupCaps;
 
@@ -201,6 +209,9 @@ extern void ResGroupMoveQuery(int sessionId, Oid groupId, const char *groupName)
 extern Oid ResGroupGetGroupIdBySessionId(int sessionId);
 extern char *getCpuSetByRole(const char *cpuset);
 extern void checkCpuSetByRole(const char *cpuset);
+
+extern void SetupIOLimit(Oid group, List *io_limit);
+extern void FreeIOLimit(ResGroupCaps *caps);
 
 #define LOG_RESGROUP_DEBUG(...) \
 	do {if (Debug_resource_group) elog(__VA_ARGS__); } while(false);

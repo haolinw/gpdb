@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include <math.h>
+#include <string.h>
 
 #include "libpq-fe.h"
 #include "access/genam.h"
@@ -33,6 +34,7 @@
 #include "cdb/cdbdisp_query.h"
 #include "cdb/memquota.h"
 #include "commands/resgroupcmds.h"
+#include "commands/tablespace.h"
 #include "common/hashfn.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -270,6 +272,7 @@ static void cpusetOperation(char *cpuset1,
 							const char *cpuset2,
 							int len,
 							bool sub);
+
 
 #ifdef USE_ASSERT_CHECKING
 static bool selfHasGroup(void);
@@ -527,6 +530,9 @@ InitResGroups(void)
 		Assert(group != NULL);
 
 		cgroupOpsRoutine->createcgroup(groupId);
+
+		SetupIOLimit(groupId, caps.ioTblspcConfigs);
+		FreeIOLimit(&caps);
 
 		if (CpusetIsEmpty(caps.cpuset))
 		{
@@ -830,6 +836,15 @@ ResGroupAlterOnCommit(const ResourceGroupCallbackContext *callbackCtx)
 		{
 			wakeupSlots(group, true);
 		}
+		else if (callbackCtx->limittype == RESGROUP_LIMIT_TYPE_IO_LIMIT)
+		{
+			if (Gp_resource_manager_policy == RESOURCE_MANAGER_POLICY_GROUP_V2)
+			{
+				SetupIOLimit(callbackCtx->groupid, callbackCtx->caps.ioTblspcConfigs);
+				FreeIOLimit(&callbackCtx->caps);
+			}
+		}
+
 		/* reset default group if cpuset has changed */
 		if (strcmp(callbackCtx->oldCaps.cpuset, callbackCtx->caps.cpuset) &&
 			gp_resource_group_enable_cgroup_cpuset)
@@ -997,6 +1012,11 @@ createGroup(Oid groupId, const ResGroupCaps *caps)
 
 	group->groupId = groupId;
 	group->caps = *caps;
+
+	/* remove local pointers */
+	group->caps.io_limit = NULL;
+	group->caps.ioTblspcConfigs = NULL;
+
 	group->nRunning = 0;
 	group->nRunningBypassed = 0;
 	ProcQueueInit(&group->waitProcs);
