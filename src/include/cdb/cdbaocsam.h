@@ -159,10 +159,9 @@ typedef struct AOCSScanDescData
 
 	/* synthetic system attributes */
 	ItemPointerData cdb_fake_ctid;
-	int64 cur_seg_rows_scanned;
 
 	/*
-	 * Only used by `analyze`
+	 * used by `analyze`
 	 */
 
 	/*
@@ -173,11 +172,19 @@ typedef struct AOCSScanDescData
 	 * If targrow = 150, then we are referring to seg1's rownum=51.
 	 */
 	int64			targrow;
+
 	/*
 	 * nextrow: pointing to the next starting row which is used to check
 	 * the distance to `targrow`
 	 */
 	int64			nextrow;
+
+	/*
+	 * segrowsprocessed: track the rows processed under the current segfile.
+	 * Don't miss updating it accordingly when "nextrow" is updated.
+	 */
+	int64 segrowsprocessed;
+
 	int64			totalrows;
 	int64			totaldeadrows;
 	AOBlkDirScan	blkdirscan;
