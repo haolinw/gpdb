@@ -1263,6 +1263,24 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	Assert(scan->aofetch->blockDirectory.minipages == scan->blkdirscan->mpinfo);
 	Assert(scan->aofetch->blockDirectory.cached_mpentry_num != InvalidEntryNum);
 
+	/*
+	 * Set the current segfile info in the blkdir struct, so we can
+	 * reuse the (cached) block directory entry during the tuple fetch
+	 * operation below. See AppendOnlyBlockDirectory_GetCachedEntry().
+	 * 
+	 * Note: It is safe to assume that the scan's segfile array and the
+	 * blockdir's segfile array are identical. Otherwise, we should stop
+	 * processing and throw an exception to make the error visible.
+	 */
+	if (blockDirectory->segmentFileInfo[segidx]->segno != segno)
+	{
+		elog(ERROR, "Unexpected condition, segfile array contents in both "
+			 "scan descriptor and block directory are not identical.");
+	}
+
+	blockDirectory->currentSegmentFileNum = blockDirectory->segmentFileInfo[segidx]->segno;
+	blockDirectory->currentSegmentFileInfo = blockDirectory->segmentFileInfo[segidx];
+
 	/* fetch the target tuple */
 	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
 		return false;
