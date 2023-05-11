@@ -593,7 +593,7 @@ AppendOnlyBlockDirectory_GetCachedEntry(
 										int columnGroupNo,
 										AppendOnlyBlockDirectoryEntry *directoryEntry)
 {
-	MinipagePerColumnGroup *minipageInfo = &blockDirectory->minipages[columnGroupNo];
+	MinipagePerColumnGroup *minipageInfo PG_USED_FOR_ASSERTS_ONLY = &blockDirectory->minipages[columnGroupNo];
 
     Assert(blockDirectory->cached_mpentry_num != InvalidEntryNum);
 	AssertImply(segmentFileNum == blockDirectory->currentSegmentFileNum,

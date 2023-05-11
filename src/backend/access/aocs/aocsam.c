@@ -595,14 +595,14 @@ aocs_beginscan_internal(Relation relation,
 	{
 		scan->nextrow = 0;
 		scan->targrow = 0;
-		scan->totalrows = 0;
-		scan->totaldeadrows = 0;
+		// scan->totalrows = 0;
+		// scan->totaldeadrows = 0;
 
-		for (int i = 0; i < total_seg; i++)
-		{
-			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
-				scan->totalrows += seginfo[i]->total_tupcount;
-		}
+		// for (int i = 0; i < total_seg; i++)
+		// {
+		// 	if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+		// 		scan->totalrows += seginfo[i]->total_tupcount;
+		// }
 	}
 
 	GetAppendOnlyEntryAttributes(RelationGetRelid(relation),
@@ -628,7 +628,7 @@ aocs_beginscan_internal(Relation relation,
 			if (OidIsValid(blkdirrelid))
 				aocs_blkdirscan_init(scan);
 
-			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
+			// scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
 	}
 

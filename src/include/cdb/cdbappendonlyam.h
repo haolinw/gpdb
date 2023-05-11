@@ -254,8 +254,8 @@ typedef struct AppendOnlyScanDescData
 	 */
 	int64				segrowsprocessed;
 
-	int64				totalrows;
-	int64				totaldeadrows;
+	// int64				totalrows;
+	// int64				totaldeadrows;
 	AOBlkDirScan		blkdirscan;
 
 	/* For Bitmap scan */
@@ -506,6 +506,23 @@ AppendOnlyScanDesc_UpdateTotalBytesRead(AppendOnlyScanDesc scan)
 		scan->totalBytesRead += scan->storageRead.current.compressedLen;
 	else
 		scan->totalBytesRead += scan->storageRead.current.uncompressedLen;
+}
+
+static inline int64
+AppendOnlyScanDesc_TotalTupCount(AppendOnlyScanDesc scan)
+{
+	Assert(scan != NULL);
+
+	int64 totalrows = 0;
+	FileSegInfo **seginfo = scan->aos_segfile_arr;
+
+    for (int i = 0; i < scan->aos_total_segfiles; i++)
+    {
+	    if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+		    totalrows += seginfo[i]->total_tupcount;
+    }
+
+    return totalrows;
 }
 
 #endif   /* CDBAPPENDONLYAM_H */
