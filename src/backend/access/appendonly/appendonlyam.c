@@ -1234,7 +1234,7 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	if (segidx < 0)
 		return false;
 
-	scan->aos_segfiles_processed = segidx;
+	scan->aos_segfiles_processed = segidx + 1;
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
 	Assert(segno >= 0);
