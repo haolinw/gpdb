@@ -1630,8 +1630,20 @@ aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 	 * AOTupleId is 48bits, the max value of totalrows is never greater than
 	 * AOTupleId_MaxSegmentFileNum * AOTupleId_MaxRowNum (< 48 significant bits).
 	 */
-	*totalrows = (double) (aocoscan->totalrows - aocoscan->totaldeadrows);
-	*totaldeadrows = (double) aocoscan->totaldeadrows;
+	// *totalrows = (double) (aocoscan->totalrows - aocoscan->totaldeadrows);
+	// *totaldeadrows = (double) aocoscan->totaldeadrows;
+
+	int64 totaltupcount = AOCSScanDesc_TotalTupCount(aocoscan);
+	int64 totaldeadtupcount = 0;
+	if (aocoscan->total_seg > 0 )
+		totaldeadtupcount = AppendOnlyVisimap_GetRelationHiddenTupleCount(&aocoscan->visibilityMap);
+	/*
+     * The conversion from int64 to double (53 significant bits) is safe as the
+	 * AOTupleId is 48bits, the max value of totalrows is never greater than
+	 * AOTupleId_MaxSegmentFileNum * AOTupleId_MaxRowNum (< 48 significant bits).
+	 */
+	*totalrows = (double) (totaltupcount - totaldeadtupcount);
+	*totaldeadrows = (double) totaldeadtupcount;
 
 	/* Prepare for sampling tuple numbers */
 	RowSamplerData rs;
