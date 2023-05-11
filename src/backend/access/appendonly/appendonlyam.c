@@ -1222,6 +1222,7 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	int segno, segidx;
 	int64 rownum, rowsprocessed;
 	AOTupleId aotid;
+	AppendOnlyBlockDirectory *blkdir;
 
 	Assert(scan->blkdirscan != NULL);
 
@@ -1258,9 +1259,10 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
 
+	blkdir = &scan->aofetch->blockDirectory;
 	/* ensure the target minipage entry was stored in fetch descriptor */
-	Assert(scan->aofetch->blockDirectory.minipages == scan->blkdirscan->mpinfo);
-	Assert(scan->aofetch->blockDirectory.cached_mpentry_num != InvalidEntryNum);
+	Assert(blkdir->minipages == scan->blkdirscan->mpinfo);
+	Assert(blkdir->cached_mpentry_num != InvalidEntryNum);
 
 	/*
 	 * Set the current segfile info in the blkdir struct, so we can
@@ -1271,14 +1273,14 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	 * blockdir's segfile array are identical. Otherwise, we should stop
 	 * processing and throw an exception to make the error visible.
 	 */
-	if (blockDirectory->segmentFileInfo[segidx]->segno != segno)
+	if (blkdir->segmentFileInfo[segidx]->segno != segno)
 	{
 		elog(ERROR, "Unexpected condition, segfile array contents in both "
 			 "scan descriptor and block directory are not identical.");
 	}
 
-	blockDirectory->currentSegmentFileNum = blockDirectory->segmentFileInfo[segidx]->segno;
-	blockDirectory->currentSegmentFileInfo = blockDirectory->segmentFileInfo[segidx];
+	blkdir->currentSegmentFileNum = blkdir->segmentFileInfo[segidx]->segno;
+	blkdir->currentSegmentFileInfo = blkdir->segmentFileInfo[segidx];
 
 	/* fetch the target tuple */
 	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
@@ -1683,14 +1685,14 @@ appendonly_beginrangescan_internal(Relation relation,
 		scan->segrowsprocessed = 0;
 		scan->nextrow = 0;
 		scan->targrow = 0;
-		scan->totalrows = 0;
-		scan->totaldeadrows = 0;
+		// scan->totalrows = 0;
+		// scan->totaldeadrows = 0;
 
-		for (int i = 0; i < segfile_count; i++)
-		{
-			if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
-				scan->totalrows += seginfo[i]->total_tupcount;
-		}
+		// for (int i = 0; i < segfile_count; i++)
+		// {
+		// 	if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+		// 		scan->totalrows += seginfo[i]->total_tupcount;
+		// }
 	}
 
 	if (segfile_count > 0)
@@ -1713,7 +1715,7 @@ appendonly_beginrangescan_internal(Relation relation,
 			if (OidIsValid(blkdirrelid))
 				appendonly_blkdirscan_init(scan);
 
-			scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
+			// scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
 	}
 

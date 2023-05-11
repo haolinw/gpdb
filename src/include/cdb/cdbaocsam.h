@@ -185,8 +185,8 @@ typedef struct AOCSScanDescData
 	 */
 	int64 segrowsprocessed;
 
-	int64			totalrows;
-	int64			totaldeadrows;
+	// int64			totalrows;
+	// int64			totaldeadrows;
 	AOBlkDirScan	blkdirscan;
 	AOCSFetchDesc	aocsfetch;
 	bool 			*proj;
@@ -459,6 +459,23 @@ AOCSScanDesc_UpdateTotalBytesRead(AOCSScanDesc scan, AttrNumber attno)
 		scan->totalBytesRead += scan->columnScanInfo.ds[attno]->ao_read.current.compressedLen;
 	else
 		scan->totalBytesRead += scan->columnScanInfo.ds[attno]->ao_read.current.uncompressedLen;
+}
+
+static inline int64
+AOCSScanDesc_TotalTupCount(AOCSScanDesc scan)
+{
+	Assert(scan != NULL);
+
+	int64 totalrows = 0;
+	AOCSFileSegInfo **seginfo = scan->seginfo;
+
+    for (int i = 0; i < scan->total_seg; i++)
+    {
+	    if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
+		    totalrows += seginfo[i]->total_tupcount;
+    }
+
+    return totalrows;
 }
 
 #endif   /* AOCSAM_H */
