@@ -1650,6 +1650,8 @@ aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 		}
 		else
 			deadrows++;
+		
+		ExecClearTuple(slot);
 	}
 
 	ExecDropSingleTupleTableSlot(slot);

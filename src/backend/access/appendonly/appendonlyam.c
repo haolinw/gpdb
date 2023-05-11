@@ -1160,19 +1160,18 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 {
 	AppendOnlyExecutorReadBlock *varblock = &scan->executorReadBlock;
 	int64 rowcount = -1;
-
-	if (scan->needNextBuffer)
-		/* haven't read block */
-		;
-	else
+	
+	if (!scan->needNextBuffer)
 	{
-		/* block was read */
+		/* we have a current block */
 		rowcount = appendonly_block_remaining_rows(scan);
 		Assert(rowcount >= 0);
 
-		if (*startrow + rowcount - 1 >= targrow)
-			/* haven't finished scanning on current block */
-			scan->needNextBuffer = false;
+		if (*startrow+ rowcount - 1 >= targrow)
+		{
+			/* row lies in current block, nothing to do */
+			return true;
+		}
 		else
 		{
 			/* skip scanning remaining rows */
@@ -1180,9 +1179,6 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 			scan->needNextBuffer = true;
 		}
 	}
-
-	if (!scan->needNextBuffer)
-		return true;
 
 	/*
 	 * Keep reading block headers until we find the block containing
@@ -1287,8 +1283,7 @@ bool
 appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
 {
 	AppendOnlyExecutorReadBlock *varblock = &aoscan->executorReadBlock;
-	bool ret = true;
-	bool isSnapshotAny = (aoscan->snapshot == SnapshotAny);
+	bool visible;
 	int64 rowsprocessed, rownum;
 	int segno;
 	AOTupleId aotid;
@@ -1313,23 +1308,10 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
 
-	if (!isSnapshotAny && !AppendOnlyVisimap_IsVisible(&aoscan->visibilityMap, &aotid))
-	{
-		ret = false;
-		/* must update tracking vars before return */
-		goto out;
-	}
+	visible = (aoscan->snapshot == SnapshotAny ||
+			   AppendOnlyVisimap_IsVisible(&aoscan->visibilityMap, &aotid));
 
-	/* fetch the target tuple */
-	if (!AppendOnlyExecutorReadBlock_FetchTuple(varblock, rownum, 0, NULL, slot))
-	{
-		ret = false;
-		/* must update tracking vars before return */
-		goto out;
-	}
-
-out:
-	if (ret)
+	if (visible && AppendOnlyExecutorReadBlock_FetchTuple(varblock, rownum, 0, NULL, slot))
 	{
 		/* OK to return this tuple */
 		pgstat_count_heap_fetch(aoscan->aos_rd);
@@ -1338,9 +1320,11 @@ out:
 	{
 		if (slot != NULL)
 			ExecClearTuple(slot);
+		
+		return false;
 	}
 
-	return ret;
+	return true;
 }
 
 /* ----------------
