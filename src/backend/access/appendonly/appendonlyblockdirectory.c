@@ -1747,7 +1747,7 @@ AppendOnlyBlockDirectory_End_forIndexOnlyScan(AppendOnlyBlockDirectory *blockDir
 int64
 AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 					   int targsegno,
-					   int colgroup,
+					   int colgroupno,
 					   int64 targrow,
 					   int64 *startrow)
 {
@@ -1759,7 +1759,7 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 	Assert(targsegno >= 0);
 	Assert(blkdir != NULL);
 
-	if (blkdirscan->segno != targsegno || blkdirscan->colgroup != colgroup)
+	if (blkdirscan->segno != targsegno || blkdirscan->colgroupno != colgroupno)
 	{
 		if (blkdirscan->sysscan != NULL)
 			systable_endscan_ordered(blkdirscan->sysscan);
@@ -1776,7 +1776,7 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 					Anum_pg_aoblkdir_columngroupno,
 					BTEqualStrategyNumber,
 					F_INT4EQ,
-					Int32GetDatum(colgroup));
+					Int32GetDatum(colgroupno));
 		
 		blkdirscan->sysscan = systable_beginscan_ordered(blkdir->blkdirRel,
 														 blkdir->blkdirIdx,
@@ -1784,7 +1784,7 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 														 2, /* nkeys */
 														 scankeys);
 		blkdirscan->segno = targsegno;
-		blkdirscan->colgroup = colgroup;
+		blkdirscan->colgroupno = colgroupno;
 	}
 
 	while (true)
@@ -1795,18 +1795,18 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 			if (HeapTupleIsValid(tuple))
 			{
 				tupdesc = RelationGetDescr(blkdir->blkdirRel);
-				extract_minipage(blkdir, tuple, tupdesc, colgroup, false);
+				extract_minipage(blkdir, tuple, tupdesc, colgroupno, false);
 				/* new minipage */
-				blkdirscan->mpinfo = &blkdir->minipages[colgroup];
+				blkdirscan->mpinfo = &blkdir->minipages[colgroupno];
 				blkdirscan->mpentryi = 0;
 			}
 			else
 			{	
-				/* done this < segno, colgroup > */
+				/* done this < segno, colgroupno > */
 				systable_endscan_ordered(blkdirscan->sysscan);
 				blkdirscan->sysscan = NULL;
 				blkdirscan->segno = -1;
-				blkdirscan->colgroup = 0;
+				blkdirscan->colgroupno = 0;
 				Assert(blkdirscan->mpentryi == InvalidEntryNum);
 				goto out;
 			}

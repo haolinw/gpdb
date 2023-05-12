@@ -190,7 +190,7 @@ typedef struct AOBlkDirScanData
     MinipagePerColumnGroup		*mpinfo;
 	SysScanDesc					sysscan;
 	int							segno;
-	int							colgroup;
+	int							colgroupno;
 	int							mpentryi;
 } AOBlkDirScanData, *AOBlkDirScan;
 
@@ -213,7 +213,7 @@ extern bool AppendOnlyBlockDirectory_GetEntry(
 extern int64 AOBlkDirScan_GetRowNum(
 	AOBlkDirScan					blkdirscan,
 	int								targsegno,
-	int								colgroup,
+	int								colgroupno,
 	int64							targrow,
 	int64							*startrow);
 extern bool AppendOnlyBlockDirectory_CoversTuple(
@@ -361,7 +361,7 @@ AOBlkDirScan_Init(AOBlkDirScan blkdirscan,
 	blkdirscan->blkdir = blkdir;
 	blkdirscan->sysscan = NULL;
 	blkdirscan->segno = -1;
-	blkdirscan->colgroup = 0;
+	blkdirscan->colgroupno = 0;
 	blkdirscan->mpinfo = NULL;
 	blkdirscan->mpentryi = InvalidEntryNum;
 }
@@ -383,7 +383,7 @@ AOBlkDirScan_Finish(AOBlkDirScan blkdirscan)
 		blkdirscan->sysscan = NULL;
 	}
 	blkdirscan->segno = -1;
-	blkdirscan->colgroup = 0;
+	blkdirscan->colgroupno = 0;
 	blkdirscan->mpinfo = NULL;
 	blkdirscan->mpentryi = InvalidEntryNum;
 	blkdirscan->blkdir = NULL;
