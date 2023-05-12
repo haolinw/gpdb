@@ -187,11 +187,9 @@ typedef struct AOFetchSegmentFile
 typedef struct AOBlkDirScanData
 {
 	AppendOnlyBlockDirectory	*blkdir;
-    MinipagePerColumnGroup		*mpinfo;
 	SysScanDesc					sysscan;
 	int							segno;
 	int							colgroupno;
-	int							mpentryi;
 } AOBlkDirScanData, *AOBlkDirScan;
 
 extern void AppendOnlyBlockDirectoryEntry_GetBeginRange(
@@ -362,8 +360,6 @@ AOBlkDirScan_Init(AOBlkDirScan blkdirscan,
 	blkdirscan->sysscan = NULL;
 	blkdirscan->segno = -1;
 	blkdirscan->colgroupno = 0;
-	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = InvalidEntryNum;
 }
 
 /* should be called before fetch_finish() */
@@ -384,8 +380,6 @@ AOBlkDirScan_Finish(AOBlkDirScan blkdirscan)
 	}
 	blkdirscan->segno = -1;
 	blkdirscan->colgroupno = 0;
-	blkdirscan->mpinfo = NULL;
-	blkdirscan->mpentryi = InvalidEntryNum;
 	blkdirscan->blkdir = NULL;
 }
 

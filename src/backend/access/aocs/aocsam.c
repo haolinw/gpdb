@@ -595,14 +595,6 @@ aocs_beginscan_internal(Relation relation,
 	{
 		scan->nextrow = 0;
 		scan->targrow = 0;
-		// scan->totalrows = 0;
-		// scan->totaldeadrows = 0;
-
-		// for (int i = 0; i < total_seg; i++)
-		// {
-		// 	if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
-		// 		scan->totalrows += seginfo[i]->total_tupcount;
-		// }
 	}
 
 	GetAppendOnlyEntryAttributes(RelationGetRelid(relation),
@@ -627,8 +619,6 @@ aocs_beginscan_internal(Relation relation,
 		{
 			if (OidIsValid(blkdirrelid))
 				aocs_blkdirscan_init(scan);
-
-			// scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
 	}
 
@@ -728,6 +718,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	int64 rowsprocessed;
 	AOTupleId aotid;
 	int ncols = scan->columnScanInfo.relationTupleDesc->natts;
+	AppendOnlyBlockDirectory *blkdir = &scan->aocsfetch->blockDirectory;
 
 	Assert(scan->blkdirscan != NULL);
 
@@ -741,6 +732,35 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 
 	segno = scan->seginfo[segidx]->segno;
 	Assert(segno >= 0);
+
+	/*
+	 * Note: It is safe to assume that the scan's segfile array and the
+	 * blockdir's segfile array are identical. Otherwise, we should stop
+	 * processing and throw an exception to make the error visible.
+	 */
+	if (blkdir->segmentFileInfo[segidx]->segno != segno)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("segfile array contents in both scan descriptor "
+				 		"and block directory are not identical on "
+						"append-optimized relation '%s'",
+						RelationGetRelationName(blkdir->aoRel))));
+	}
+
+	/*
+	 * Unlike ao_row, we set currentSegmentFileNum for ao_column here
+	 * just for passing the assertion in extract_minipage() called by
+	 * AOBlkDirScan_GetRowNum().
+	 * Since we don't invoke AppendOnlyBlockDirectory_GetCachedEntry()
+	 * for ao_column, it shoule be restored back to the original value
+	 * for AppendOnlyBlockDirectory_GetEntry() working properly.
+	 * 
+	 * This is a temporary hack to avoid introducing extra parameter
+	 * to extract_minipage().
+	 */
+	int currentSegmentFileNum = blkdir->currentSegmentFileNum;
+	blkdir->currentSegmentFileNum = blkdir->segmentFileInfo[segidx]->segno;
 
 	/* locate the target row by seqscan block directory */
 	for (int col = 0; col < ncols; col++)
@@ -770,6 +790,9 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 		break;
 	}
 
+	/* restore to the original value as above mentioned */
+	blkdir->currentSegmentFileNum = currentSegmentFileNum;
+
 	if (rownum < 0)
 		return false;
 
@@ -777,9 +800,6 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	AOTupleIdInit(&aotid, segno, rownum);
 
 	ExecClearTuple(slot);
-
-	/* ensure no cached minipage entry as it is disabled for ao_column tables */
-	Assert(scan->aocsfetch->blockDirectory.cached_mpentry_num == InvalidEntryNum);
 
 	/* fetch the target tuple */
 	if(!aocs_fetch(scan->aocsfetch, &aotid, slot))
