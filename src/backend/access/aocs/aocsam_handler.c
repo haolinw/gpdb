@@ -1621,17 +1621,6 @@ aoco_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 	TableScanDesc scan = table_beginscan_analyze(onerel);
 	TupleTableSlot *slot = table_slot_create(onerel, NULL);
 	AOCSScanDesc aocoscan = (AOCSScanDesc) scan;
-	
-	/*
-	 * We can easily obtain the live and dead row counts from the scan
-	 * descriptor. These were already initialized during aocs_beginscan().
-	 * 
-	 * The conversion from int64 to double (53 significant bits) is safe as the
-	 * AOTupleId is 48bits, the max value of totalrows is never greater than
-	 * AOTupleId_MaxSegmentFileNum * AOTupleId_MaxRowNum (< 48 significant bits).
-	 */
-	// *totalrows = (double) (aocoscan->totalrows - aocoscan->totaldeadrows);
-	// *totaldeadrows = (double) aocoscan->totaldeadrows;
 
 	int64 totaltupcount = AOCSScanDesc_TotalTupCount(aocoscan);
 	int64 totaldeadtupcount = 0;

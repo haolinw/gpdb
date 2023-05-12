@@ -1438,14 +1438,6 @@ appendonly_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 	TupleTableSlot *slot = table_slot_create(onerel, NULL);
 	AppendOnlyScanDesc aoscan = (AppendOnlyScanDesc) scan;
 
-	// /*
-	//  * We can easily obtain the live and dead row counts from the scan
-	//  * descriptor. These were already initialized during appendonly_beginscan().
-	//  * 
-	//  * The conversion from int64 to double (53 significant bits) is safe as the
-	//  * AOTupleId is 48bits, the max value of totalrows is never greater than
-	//  * AOTupleId_MaxSegmentFileNum * AOTupleId_MaxRowNum (< 48 significant bits).
-	//  */
 	int64 totaltupcount = AppendOnlyScanDesc_TotalTupCount(aoscan);
 	int64 totaldeadtupcount = 0;
 	if (aoscan->aos_total_segfiles > 0 )
@@ -1457,9 +1449,6 @@ appendonly_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 	 */
 	*totalrows = (double) (totaltupcount - totaldeadtupcount);
 	*totaldeadrows = (double) totaldeadtupcount;
-	
-	// *totalrows = (double) (aoscan->totalrows - aoscan->totaldeadrows);
-	// *totaldeadrows = (double) aoscan->totaldeadrows;
 
 	/* Prepare for sampling row numbers */
 	RowSamplerData rs;

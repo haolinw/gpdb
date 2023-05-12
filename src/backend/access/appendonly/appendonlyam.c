@@ -1223,7 +1223,7 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	int segno, segidx;
 	int64 rownum, rowsprocessed;
 	AOTupleId aotid;
-	AppendOnlyBlockDirectory *blkdir;
+	AppendOnlyBlockDirectory *blkdir = &scan->aofetch->blockDirectory;
 
 	Assert(scan->blkdirscan != NULL);
 
@@ -1236,6 +1236,29 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
 	Assert(segno >= 0);
+
+	/*
+	 * Note: It is safe to assume that the scan's segfile array and the
+	 * blockdir's segfile array are identical. Otherwise, we should stop
+	 * processing and throw an exception to make the error visible.
+	 */
+	if (blkdir->segmentFileInfo[segidx]->segno != segno)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("segfile array contents in both scan descriptor "
+				 		"and block directory are not identical on "
+						"append-optimized relation '%s'",
+						RelationGetRelationName(blkdir->aoRel))));
+	}
+
+	/*
+	 * Set the current segfile info in the blkdir struct, so we can
+	 * reuse the (cached) block directory entry during the tuple fetch
+	 * operation below. See AppendOnlyBlockDirectory_GetCachedEntry().
+	 */
+	blkdir->currentSegmentFileNum = blkdir->segmentFileInfo[segidx]->segno;
+	blkdir->currentSegmentFileInfo = blkdir->segmentFileInfo[segidx];
 
 	/*
 	 * "nextrow" should be always pointing to the first row of
@@ -1260,28 +1283,9 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
 
-	blkdir = &scan->aofetch->blockDirectory;
 	/* ensure the target minipage entry was stored in fetch descriptor */
-	Assert(blkdir->minipages == scan->blkdirscan->mpinfo);
 	Assert(blkdir->cached_mpentry_num != InvalidEntryNum);
-
-	/*
-	 * Set the current segfile info in the blkdir struct, so we can
-	 * reuse the (cached) block directory entry during the tuple fetch
-	 * operation below. See AppendOnlyBlockDirectory_GetCachedEntry().
-	 * 
-	 * Note: It is safe to assume that the scan's segfile array and the
-	 * blockdir's segfile array are identical. Otherwise, we should stop
-	 * processing and throw an exception to make the error visible.
-	 */
-	if (blkdir->segmentFileInfo[segidx]->segno != segno)
-	{
-		elog(ERROR, "Unexpected condition, segfile array contents in both "
-			 "scan descriptor and block directory are not identical.");
-	}
-
-	blkdir->currentSegmentFileNum = blkdir->segmentFileInfo[segidx]->segno;
-	blkdir->currentSegmentFileInfo = blkdir->segmentFileInfo[segidx];
+	Assert(blkdir->minipages == &blkdir->minipages[0]);
 
 	/* fetch the target tuple */
 	if(!appendonly_fetch(scan->aofetch, &aotid, slot))
@@ -1687,14 +1691,6 @@ appendonly_beginrangescan_internal(Relation relation,
 		scan->segrowsprocessed = 0;
 		scan->nextrow = 0;
 		scan->targrow = 0;
-		// scan->totalrows = 0;
-		// scan->totaldeadrows = 0;
-
-		// for (int i = 0; i < segfile_count; i++)
-		// {
-		// 	if (seginfo[i]->state != AOSEG_STATE_AWAITING_DROP)
-		// 		scan->totalrows += seginfo[i]->total_tupcount;
-		// }
 	}
 
 	if (segfile_count > 0)
@@ -1716,8 +1712,6 @@ appendonly_beginrangescan_internal(Relation relation,
 		{
 			if (OidIsValid(blkdirrelid))
 				appendonly_blkdirscan_init(scan);
-
-			// scan->totaldeadrows = AppendOnlyVisimap_GetRelationHiddenTupleCount(&scan->visibilityMap);
 		}
 	}
 
