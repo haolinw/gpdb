@@ -185,8 +185,6 @@ typedef struct AOCSScanDescData
 	 */
 	int64 segrowsprocessed;
 
-	// int64			totalrows;
-	// int64			totaldeadrows;
 	AOBlkDirScan	blkdirscan;
 	AOCSFetchDesc	aocsfetch;
 	bool 			*proj;

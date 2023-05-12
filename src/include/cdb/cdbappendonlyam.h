@@ -254,8 +254,6 @@ typedef struct AppendOnlyScanDescData
 	 */
 	int64				segrowsprocessed;
 
-	// int64				totalrows;
-	// int64				totaldeadrows;
 	AOBlkDirScan		blkdirscan;
 
 	/* For Bitmap scan */

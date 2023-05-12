@@ -598,8 +598,8 @@ AppendOnlyBlockDirectory_GetCachedEntry(
 	MinipagePerColumnGroup *minipageInfo PG_USED_FOR_ASSERTS_ONLY = &blockDirectory->minipages[columnGroupNo];
 
     Assert(blockDirectory->cached_mpentry_num != InvalidEntryNum);
-	AssertImply(segmentFileNum == blockDirectory->currentSegmentFileNum,
-				blockDirectory->currentSegmentFileInfo != NULL);
+	Assert(segmentFileNum == blockDirectory->currentSegmentFileNum);
+	Assert(blockDirectory->currentSegmentFileInfo != NULL);
 	Assert(minipageInfo->numMinipageEntries > 0);
 
 	return set_directoryentry_range(blockDirectory,
@@ -659,8 +659,16 @@ AppendOnlyBlockDirectory_GetEntry(
 					  "(%d, %d, " INT64_FORMAT ")",
 					  columnGroupNo, segmentFileNum, rowNum)));
 
-	/* Have cached minipage entry ? */
-	if (blockDirectory->cached_mpentry_num != InvalidEntryNum)
+	/*
+	 * We enable caching minipage entry only for ao_row.
+	 * 
+	 * Because ao_column requires all column values,
+	 * but the entry returned here caches for only one
+	 * column. It is unavoidable to scan blkdir again in
+	 * aocs_fetch() to extract all other column entries
+	 * for constructing the whole tuple.
+	 */
+	if (!blockDirectory->isAOCol && blockDirectory->cached_mpentry_num != InvalidEntryNum)
 		return AppendOnlyBlockDirectory_GetCachedEntry(blockDirectory,
 													   segmentFileNum,
 													   columnGroupNo,
@@ -1747,6 +1755,8 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 	HeapTuple tuple;
 	TupleDesc tupdesc;
 	AppendOnlyBlockDirectory *blkdir = blkdirscan->blkdir;
+	int mpentryi;
+	MinipagePerColumnGroup *mpinfo;
 	int64 rownum = -1;
 
 	Assert(targsegno >= 0);
@@ -1780,9 +1790,12 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 		blkdirscan->colgroupno = colgroupno;
 	}
 
+	mpentryi = blkdir->cached_mpentry_num;
+	mpinfo = &blkdir->minipages[colgroupno];
+
 	while (true)
 	{
-		if (blkdirscan->mpinfo == NULL)
+		if (mpentryi == InvalidEntryNum)
 		{
 			tuple = systable_getnext_ordered(blkdirscan->sysscan, ForwardScanDirection);
 			if (HeapTupleIsValid(tuple))
@@ -1790,8 +1803,8 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 				tupdesc = RelationGetDescr(blkdir->blkdirRel);
 				extract_minipage(blkdir, tuple, tupdesc, colgroupno);
 				/* new minipage */
-				blkdirscan->mpinfo = &blkdir->minipages[colgroupno];
-				blkdirscan->mpentryi = 0;
+				mpentryi = 0;
+				mpinfo = &blkdir->minipages[colgroupno];
 			}
 			else
 			{	
@@ -1800,21 +1813,21 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 				blkdirscan->sysscan = NULL;
 				blkdirscan->segno = -1;
 				blkdirscan->colgroupno = 0;
-				Assert(blkdirscan->mpentryi == InvalidEntryNum);
+				/* always set both vars in pairs for safe */
+				mpentryi = InvalidEntryNum;
+				mpinfo = NULL;
+
 				goto out;
 			}
 		}
 
-		Assert(blkdirscan->mpinfo != NULL);
-		Assert(blkdirscan->mpentryi != InvalidEntryNum);
+		Assert(mpentryi != InvalidEntryNum);
+		Assert(mpinfo != NULL);
 
-		MinipagePerColumnGroup *mpinfo = blkdirscan->mpinfo;
-		Minipage *mp = mpinfo->minipage;
-		MinipageEntry *entry;
-
-		for (int i = blkdirscan->mpentryi; i < mpinfo->numMinipageEntries; i++)
+		for (int i = mpentryi; i < mpinfo->numMinipageEntries; i++)
 		{
-			entry = &(mp->entry[i]);
+			Minipage *mp = mpinfo->minipage;
+			MinipageEntry *entry = &(mp->entry[i]);
 
 			Assert(entry->firstRowNum > 0);
 			Assert(entry->rowCount > 0);
@@ -1822,7 +1835,7 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 			if (*startrow + entry->rowCount - 1 >= targrow)
 			{
 				rownum = entry->firstRowNum + (targrow - *startrow);
-				blkdirscan->mpentryi = i;
+				mpentryi = i;
 				goto out;
 			}
 
@@ -1830,27 +1843,13 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 		}
 
 		/* done this minipage */
-		blkdirscan->mpinfo = NULL;
-		blkdirscan->mpentryi = InvalidEntryNum;
+		mpentryi = InvalidEntryNum;
+		mpinfo = NULL;
 	}
 
 out:
-	/*
-	 * Set the result of minipage entry lookup.
-	 * 
-	 * We enable caching minipage entry only for ao_row.
-	 * 
-	 * Because ao_column requires all column values,
-	 * but the entry returned here caches for only one
-	 * column. It is unavoidable to scan blkdir again in
-	 * aocs_fetch() to extract all other column entries
-	 * for fetching the whole tuple.
-	 * 
-	 * So we didn't enable caching minipage entry for
-	 * ao_column tables.
-	 */
-	if (RelationIsAoRows(blkdir->aoRel))
-		blkdir->cached_mpentry_num = blkdirscan->mpentryi;
+	/* set the result of minipage entry lookup */
+	blkdir->cached_mpentry_num = mpentryi;
 
 	return rownum;
 }
