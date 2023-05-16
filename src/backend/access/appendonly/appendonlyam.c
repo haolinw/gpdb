@@ -1126,6 +1126,12 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 	{
 		/* done current segfile */
 		CloseScannedFileSeg(scan);
+		/*
+		 * Adjust aos_segfiles_processed to guide
+		 * SetNextFileSegForRead() opening next
+		 * right segfile.
+		 */
+		scan->aos_segfiles_processed = segidx;
 	}
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
@@ -1147,7 +1153,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 		}
 	}
 
-	return segno;	
+	return segno;
 }
 
 static inline int64
@@ -1161,14 +1167,14 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 {
 	AppendOnlyExecutorReadBlock *varblock = &scan->executorReadBlock;
 	int64 rowcount = -1;
-	
+
 	if (!scan->needNextBuffer)
 	{
 		/* we have a current block */
 		rowcount = appendonly_block_remaining_rows(scan);
 		Assert(rowcount >= 0);
 
-		if (*startrow+ rowcount - 1 >= targrow)
+		if (*startrow + rowcount - 1 >= targrow)
 		{
 			/* row lies in current block, nothing to do */
 			return true;
