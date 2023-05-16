@@ -707,6 +707,7 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 		scan->segrowsprocessed = 0;
 	}
 
+	/* row is beyond the total number of rows in the relation */
 	return -1;
 }
 
@@ -731,7 +732,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	scan->cur_seg = segidx;
 
 	segno = scan->seginfo[segidx]->segno;
-	Assert(segno >= 0);
+	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
 
 	/*
 	 * Note: It is safe to assume that the scan's segfile array and the
@@ -755,9 +756,6 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	 * Since we don't invoke AppendOnlyBlockDirectory_GetCachedEntry()
 	 * for ao_column, it shoule be restored back to the original value
 	 * for AppendOnlyBlockDirectory_GetEntry() working properly.
-	 * 
-	 * This is a temporary hack to avoid introducing extra parameter
-	 * to extract_minipage().
 	 */
 	int currentSegmentFileNum = blkdir->currentSegmentFileNum;
 	blkdir->currentSegmentFileNum = blkdir->segmentFileInfo[segidx]->segno;
@@ -828,7 +826,7 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 	}
 
 	segno = scan->seginfo[segidx]->segno;
-	Assert(segno >= 0);
+	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
 
 	if (segidx > scan->cur_seg)
 	{
@@ -980,7 +978,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	if (ds->blockFirstRowNum <= 0)
 		elog(ERROR, "AOCO varblock->blockFirstRowNum should be greater than zero.");
 
-	Assert(segno >= 0);
+	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
 	Assert(startrow <= endrow);
 
 	rowstoprocess = endrow - startrow + 1;

@@ -1102,6 +1102,7 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow)
 		scan->segrowsprocessed = 0;
 	}
 
+	/* row is beyond the total number of rows in the relation */
 	return -1;
 }
 
@@ -1135,7 +1136,7 @@ appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 	}
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
-	Assert(segno >= 0);
+	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
 
 	if (scan->aos_need_new_segfile)
 	{
@@ -1241,7 +1242,7 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	scan->aos_segfiles_processed = segidx + 1;
 
 	segno = scan->aos_segfile_arr[segidx]->segno;
-	Assert(segno >= 0);
+	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
 
 	/*
 	 * Note: It is safe to assume that the scan's segfile array and the
