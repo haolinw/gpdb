@@ -713,6 +713,9 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 	return -1;
 }
 
+/*
+ * block directory based get_target_tuple()
+ */
 bool
 aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
@@ -812,6 +815,9 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	return true;
 }
 
+/*
+ * returns the segfile number in which `targrow` locates  
+ */
 static int
 aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 {
@@ -858,6 +864,9 @@ aocs_block_remaining_rows(DatumStreamRead *ds)
 	return (ds->blockRowCount - ds->blockRowsProcessed);
 }
 
+/*
+ * fetches all columns of the target tuple corresponding to `targrow`
+ */
 bool
 aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
@@ -965,6 +974,9 @@ out:
 	return ret;
 }
 
+/*
+ * fetches a single column value corresponding to `endrow` (equals to `targrow`)
+ */
 bool
 aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, bool chkvisimap, TupleTableSlot *slot)
 {
@@ -1015,6 +1027,13 @@ out:
 	return ret;
 }
 
+/*
+ * Given a specific target row number 'targrow' (in the space of all row numbers
+ * physically present in the table, i.e. across all segfiles), scan and return
+ * the corresponding tuple in 'slot'.
+ *
+ * If the tuple is visible, return true. Otherwise, return false.
+ */
 bool
 aocs_get_target_tuple(AOCSScanDesc aoscan, int64 targrow, TupleTableSlot *slot)
 {

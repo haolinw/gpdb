@@ -1745,6 +1745,18 @@ AppendOnlyBlockDirectory_End_forIndexOnlyScan(AppendOnlyBlockDirectory *blockDir
 	MemoryContextDelete(blockDirectory->memoryContext);
 }
 
+/*
+ * AOBlkDirScan_GetRowNum
+ * 
+ * Given a target logical row number,
+ * returns the corresponding physical rowNum,
+ * or -1 if not found.
+ * 
+ * targrow: 0-based target logical row number
+ * startrow: pointer of the start point stepping to targrow
+ * targsegno: the segfile number in which targrow locates
+ * colgroupno: current coloumn group number, always 0 for ao_row
+ */
 int64
 AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 					   int targsegno,

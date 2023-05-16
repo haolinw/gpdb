@@ -1105,6 +1105,9 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow)
 	return -1;
 }
 
+/*
+ * returns the segfile number in which `targrow` locates  
+ */
 static int
 appendonly_getsegment(AppendOnlyScanDesc scan, int64 targrow)
 {
@@ -1162,6 +1165,9 @@ appendonly_block_remaining_rows(AppendOnlyScanDesc scan)
 	return (scan->executorReadBlock.rowCount - scan->executorReadBlock.blockRowsProcessed);
 }
 
+/*
+ * locates the block in which `targrow` exists
+ */
 static bool
 appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 {
@@ -1223,6 +1229,9 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 	return false;
 }
 
+/*
+ * block directory based get_target_tuple()
+ */
 static bool
 appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
