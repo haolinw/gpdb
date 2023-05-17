@@ -2,11 +2,6 @@
 -- All tuples are directed to seg0 and each INSERT has an increasing row count
 -- to make their identification easy.
 
--- helper function to assert `tupcount` in pg_ao(cs)seg == sum of number
--- of `row_count` across all aoblkdir entries for each <segno, columngroup_no>
-CREATE OR REPLACE FUNCTION test_aoblkdir_rowcount(tabname TEXT) RETURNS TABLE (segno INTEGER, columngroup_no INTEGER, rowcount_sum_equalto_seg_tupcount BOOLEAN) AS $$ DECLARE row RECORD; /* in func */ result BOOLEAN; /* in func */ BEGIN FOR row IN SELECT aoblkdir.segno, aoblkdir.columngroup_no, SUM(aoblkdir.row_count) as row_count_sum FROM gp_toolkit.__gp_aoblkdir(tabname) aoblkdir WHERE aoblkdir.segno IN (SELECT ao_or_aocs_seg.segno FROM gp_ao_or_aocs_seg(tabname) ao_or_aocs_seg) GROUP BY aoblkdir.segno, aoblkdir.columngroup_no ORDER BY aoblkdir.segno, aoblkdir.columngroup_no ASC LOOP SELECT (row.row_count_sum = ao_or_aocs_seg.tupcount) INTO result FROM gp_ao_or_aocs_seg(tabname) ao_or_aocs_seg WHERE ao_or_aocs_seg.segno = row.segno; /* in func */ segno := row.segno; /* in func */ columngroup_no := row.columngroup_no; /* in func */ rowcount_sum_equalto_seg_tupcount := result; /* in func */ RETURN NEXT; /* in func */ END LOOP; /* in func */ END; /* in func */ $$ LANGUAGE plpgsql;
-CREATE
-
 --------------------------------------------------------------------------------
 -- AO tables
 --------------------------------------------------------------------------------
@@ -320,118 +315,153 @@ COMMIT
 DROP TABLE ao_blkdir_test;
 DROP
 
--- Test `tupcount` in pg_ao(cs)seg == sum of number of `row_count` across all
--- aoblkdir entries for each <segno, columngroup_no>.
-create table ao_blkdir_test_rowcount (id int, a int, b inet, c inet) using ao_row with (compresstype=zlib, compresslevel=3);
+-- Test `tupcount` in pg_aoseg == sum of number of `row_count` across all
+-- aoblkdir entries for each segno. Test with commits, aborts and deletes.
+
+-- Case1: without VACUUM ANALYZE
+CREATE TABLE ao_blkdir_test_rowcount(i int, j int) USING ao_row DISTRIBUTED BY (j);
 CREATE
-create index on ao_blkdir_test_rowcount(a);
-CREATE
-
-insert into ao_blkdir_test_rowcount select 2, i, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text))::inet, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text))::inet from generate_series(1,1000)i;
-INSERT 1000
-
-insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
--- concurrent inserts to generate multiple segfiles
-1: begin;
+1: BEGIN;
 BEGIN
-1: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-2: begin;
+2: BEGIN;
 BEGIN
-2: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-3: begin;
+3: BEGIN;
 BEGIN
-3: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-4: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-1: commit;
-COMMIT
-2: commit;
-COMMIT
-3: abort;
+4: BEGIN;
+BEGIN
+1: INSERT INTO ao_blkdir_test_rowcount SELECT i, 2 FROM generate_series(1, 10) i;
+INSERT 10
+2: INSERT INTO ao_blkdir_test_rowcount SELECT i, 3 FROM generate_series(1, 20) i;
+INSERT 20
+3: INSERT INTO ao_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 30) i;
+INSERT 30
+3: ABORT;
 ABORT
+3: BEGIN;
+BEGIN
+3: INSERT INTO ao_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 40) i;
+INSERT 40
+4: INSERT INTO ao_blkdir_test_rowcount SELECT i, 7 FROM generate_series(1, 50) i;
+INSERT 50
+1: COMMIT;
+COMMIT
+2: COMMIT;
+COMMIT
+3: COMMIT;
+COMMIT
+4: COMMIT;
+COMMIT
+DELETE FROM ao_blkdir_test_rowcount WHERE j = 7;
+DELETE 50
 
-vacuum analyze ao_blkdir_test_rowcount;
-VACUUM
+CREATE INDEX ao_blkdir_test_rowcount_idx ON ao_blkdir_test_rowcount(i);
+CREATE
 
-select (test_aoblkdir_rowcount('ao_blkdir_test_rowcount')).* from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | rowcount_sum_equalto_seg_tupcount 
--------+----------------+-----------------------------------
- 1     | 0              | t                                 
- 2     | 0              | t                                 
- 4     | 0              | t                                 
-(3 rows)
-
-select segno,tupcount from gp_toolkit.__gp_aoseg('ao_blkdir_test_rowcount') where segment_id = 0;
- segno | tupcount 
--------+----------
- 1     | 4000     
- 2     | 1000     
- 3     | 0        
- 4     | 1000     
+SELECT segno, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno;
+ segno | totalrows 
+-------+-----------
+ 1     | 10        
+ 2     | 20        
+ 3     | 40        
+ 4     | 50        
+(4 rows)
+SELECT segno, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aoseg('ao_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno;
+ segno | totalrows 
+-------+-----------
+ 1     | 10        
+ 2     | 20        
+ 3     | 40        
+ 4     | 50        
 (4 rows)
 
-select (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).segno, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).columngroup_no, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).row_count from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | row_count 
--------+----------------+-----------
- 1     | 0              | 962       
- 1     | 0              | 38        
- 1     | 0              | 962       
- 1     | 0              | 38        
- 1     | 0              | 962       
- 1     | 0              | 38        
- 1     | 0              | 962       
- 1     | 0              | 38        
- 2     | 0              | 962       
- 2     | 0              | 38        
- 4     | 0              | 962       
- 4     | 0              | 38        
-(12 rows)
+-- Case2: with VACUUM ANALYZE
+DROP TABLE ao_blkdir_test_rowcount;
+DROP
+CREATE TABLE ao_blkdir_test_rowcount(i int, j int) USING ao_row DISTRIBUTED BY (j);
+CREATE
+CREATE INDEX ao_blkdir_test_rowcount_idx ON ao_blkdir_test_rowcount(i);
+CREATE
+1: BEGIN;
+BEGIN
+2: BEGIN;
+BEGIN
+3: BEGIN;
+BEGIN
+4: BEGIN;
+BEGIN
+1: INSERT INTO ao_blkdir_test_rowcount SELECT i, 2 FROM generate_series(1, 10) i;
+INSERT 10
+1: INSERT INTO ao_blkdir_test_rowcount SELECT i, 2 FROM ao_blkdir_test_rowcount;
+INSERT 10
+1: INSERT INTO ao_blkdir_test_rowcount SELECT i, 2 FROM ao_blkdir_test_rowcount;
+INSERT 20
+2: INSERT INTO ao_blkdir_test_rowcount SELECT i, 3 FROM generate_series(1, 20) i;
+INSERT 20
+2: INSERT INTO ao_blkdir_test_rowcount SELECT i, 3 FROM ao_blkdir_test_rowcount;
+INSERT 20
+2: INSERT INTO ao_blkdir_test_rowcount SELECT i, 3 FROM ao_blkdir_test_rowcount;
+INSERT 40
+3: INSERT INTO ao_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 30) i;
+INSERT 30
+3: INSERT INTO ao_blkdir_test_rowcount SELECT i, 4 FROM ao_blkdir_test_rowcount;
+INSERT 30
+3: INSERT INTO ao_blkdir_test_rowcount SELECT i, 4 FROM ao_blkdir_test_rowcount;
+INSERT 60
+4: INSERT INTO ao_blkdir_test_rowcount SELECT i, 7 FROM generate_series(1, 50) i;
+INSERT 50
+4: INSERT INTO ao_blkdir_test_rowcount SELECT i, 7 FROM ao_blkdir_test_rowcount;
+INSERT 50
+4: INSERT INTO ao_blkdir_test_rowcount SELECT i, 7 FROM ao_blkdir_test_rowcount;
+INSERT 100
+1: COMMIT;
+COMMIT
+2: COMMIT;
+COMMIT
+3: ABORT;
+ABORT
+4: COMMIT;
+COMMIT
 
-update ao_blkdir_test_rowcount set a = a + 1;
-UPDATE 6000
-vacuum analyze ao_blkdir_test_rowcount;
+DELETE FROM ao_blkdir_test_rowcount WHERE j = 7;
+DELETE 200
+VACUUM ANALYZE ao_blkdir_test_rowcount;
 VACUUM
 
-select (test_aoblkdir_rowcount('ao_blkdir_test_rowcount')).* from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | rowcount_sum_equalto_seg_tupcount 
--------+----------------+-----------------------------------
- 3     | 0              | t                                 
+SELECT segno, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno;
+ segno | totalrows 
+-------+-----------
+ 1     | 40        
+ 2     | 80        
+(2 rows)
+SELECT segno, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aoseg('ao_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno;
+ segno | totalrows 
+-------+-----------
+ 1     | 40        
+ 2     | 80        
+ 3     | 0         
+ 4     | 0         
+(4 rows)
+
+UPDATE ao_blkdir_test_rowcount SET i = i + 1;
+UPDATE 120
+VACUUM ANALYZE ao_blkdir_test_rowcount;
+VACUUM
+
+SELECT segno, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno;
+ segno | totalrows 
+-------+-----------
+ 3     | 120       
 (1 row)
+SELECT segno, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aoseg('ao_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno;
+ segno | totalrows 
+-------+-----------
+ 1     | 0         
+ 2     | 0         
+ 3     | 120       
+ 4     | 0         
+(4 rows)
 
-select segno,tupcount from gp_toolkit.__gp_aoseg('ao_blkdir_test_rowcount') where segment_id = 0;
- segno | tupcount 
--------+----------
- 1     | 0        
- 2     | 0        
- 3     | 6000     
- 4     | 0        
- 5     | 0        
-(5 rows)
-
-select (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).segno, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).columngroup_no, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).row_count from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | row_count 
--------+----------------+-----------
- 3     | 0              | 962       
- 3     | 0              | 962       
- 3     | 0              | 962       
- 3     | 0              | 962       
- 3     | 0              | 962       
- 3     | 0              | 962       
- 3     | 0              | 228       
-(7 rows)
-
-drop table ao_blkdir_test_rowcount;
+DROP TABLE ao_blkdir_test_rowcount;
 DROP
 
 --------------------------------------------------------------------------------
@@ -938,168 +968,170 @@ DROP TABLE aoco_blkdir_test;
 DROP
 
 -- Test `tupcount` in pg_ao(cs)seg == sum of number of `row_count` across all
--- aoblkdir entries for each <segno, columngroup_no>.
-create table ao_blkdir_test_rowcount (id int, a int, b inet, c inet) using ao_column with (compresstype=zlib, compresslevel=3);
+-- aoblkdir entries for each <segno, columngroup_no>. Test with commits, aborts
+-- and deletes.
+
+-- Case1: without VACUUM ANALYZE
+CREATE TABLE aoco_blkdir_test_rowcount(i int, j int) USING ao_column DISTRIBUTED BY (j);
 CREATE
-create index on ao_blkdir_test_rowcount(a);
-CREATE
-
-insert into ao_blkdir_test_rowcount select 2, i, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text))::inet, (select ((i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text || '.' || (i%255)::text))::inet from generate_series(1,1000)i;
-INSERT 1000
-
-insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
--- concurrent inserts to generate multiple segfiles
-1: begin;
+1: BEGIN;
 BEGIN
-1: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-2: begin;
+2: BEGIN;
 BEGIN
-2: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-3: begin;
+3: BEGIN;
 BEGIN
-3: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-4: insert into ao_blkdir_test_rowcount select * from ao_blkdir_test_rowcount limit 1000;
-INSERT 1000
-
-1: commit;
-COMMIT
-2: commit;
-COMMIT
-3: abort;
+4: BEGIN;
+BEGIN
+1: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 2 FROM generate_series(1, 10) i;
+INSERT 10
+2: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 3 FROM generate_series(1, 20) i;
+INSERT 20
+3: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 30) i;
+INSERT 30
+3: ABORT;
 ABORT
+3: BEGIN;
+BEGIN
+3: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 40) i;
+INSERT 40
+4: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 7 FROM generate_series(1, 50) i;
+INSERT 50
+1: COMMIT;
+COMMIT
+2: COMMIT;
+COMMIT
+3: COMMIT;
+COMMIT
+4: COMMIT;
+COMMIT
+DELETE FROM aoco_blkdir_test_rowcount WHERE j = 7;
+DELETE 50
 
-vacuum analyze ao_blkdir_test_rowcount;
-VACUUM
+CREATE INDEX aoco_blkdir_test_rowcount_idx ON aoco_blkdir_test_rowcount(i);
+CREATE
 
-select (test_aoblkdir_rowcount('ao_blkdir_test_rowcount')).* from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | rowcount_sum_equalto_seg_tupcount 
--------+----------------+-----------------------------------
- 1     | 0              | t                                 
- 1     | 1              | t                                 
- 1     | 2              | t                                 
- 1     | 3              | t                                 
- 2     | 0              | t                                 
- 2     | 1              | t                                 
- 2     | 2              | t                                 
- 2     | 3              | t                                 
- 4     | 0              | t                                 
- 4     | 1              | t                                 
- 4     | 2              | t                                 
- 4     | 3              | t                                 
-(12 rows)
-
-select segno,column_num,physical_segno,tupcount from gp_toolkit.__gp_aocsseg('ao_blkdir_test_rowcount') where segment_id = 0;
- segno | column_num | physical_segno | tupcount 
--------+------------+----------------+----------
- 1     | 0          | 1              | 4000     
- 1     | 1          | 129            | 4000     
- 1     | 2          | 257            | 4000     
- 1     | 3          | 385            | 4000     
- 2     | 0          | 2              | 1000     
- 2     | 1          | 130            | 1000     
- 2     | 2          | 258            | 1000     
- 2     | 3          | 386            | 1000     
- 3     | 0          | 3              | 0        
- 3     | 1          | 131            | 0        
- 3     | 2          | 259            | 0        
- 3     | 3          | 387            | 0        
- 4     | 0          | 4              | 1000     
- 4     | 1          | 132            | 1000     
- 4     | 2          | 260            | 1000     
- 4     | 3          | 388            | 1000     
-(16 rows)
-
-select (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).segno, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).columngroup_no, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).row_count from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | row_count 
+SELECT segno, columngroup_no, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('aoco_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno, columngroup_no;
+ segno | columngroup_no | totalrows 
 -------+----------------+-----------
- 1     | 0              | 1000      
- 1     | 0              | 1000      
- 1     | 0              | 1000      
- 1     | 0              | 1000      
- 1     | 1              | 1000      
- 1     | 1              | 1000      
- 1     | 1              | 1000      
- 1     | 1              | 1000      
- 1     | 2              | 1000      
- 1     | 2              | 1000      
- 1     | 2              | 1000      
- 1     | 2              | 1000      
- 1     | 3              | 1000      
- 1     | 3              | 1000      
- 1     | 3              | 1000      
- 1     | 3              | 1000      
- 2     | 0              | 1000      
- 2     | 1              | 1000      
- 2     | 2              | 1000      
- 2     | 3              | 1000      
- 4     | 0              | 1000      
- 4     | 1              | 1000      
- 4     | 2              | 1000      
- 4     | 3              | 1000      
-(24 rows)
+ 1     | 0              | 10        
+ 1     | 1              | 10        
+ 2     | 0              | 20        
+ 2     | 1              | 20        
+ 3     | 0              | 40        
+ 3     | 1              | 40        
+ 4     | 0              | 50        
+ 4     | 1              | 50        
+(8 rows)
+SELECT segno, column_num, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aocsseg('aoco_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno, column_num;
+ segno | column_num | totalrows 
+-------+------------+-----------
+ 1     | 0          | 10        
+ 1     | 1          | 10        
+ 2     | 0          | 20        
+ 2     | 1          | 20        
+ 3     | 0          | 40        
+ 3     | 1          | 40        
+ 4     | 0          | 50        
+ 4     | 1          | 50        
+(8 rows)
 
-update ao_blkdir_test_rowcount set a = a + 1;
-UPDATE 6000
-vacuum analyze ao_blkdir_test_rowcount;
-VACUUM
-
-select (test_aoblkdir_rowcount('ao_blkdir_test_rowcount')).* from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | rowcount_sum_equalto_seg_tupcount 
--------+----------------+-----------------------------------
- 3     | 0              | t                                 
- 3     | 1              | t                                 
- 3     | 2              | t                                 
- 3     | 3              | t                                 
-(4 rows)
-
-select segno,column_num,physical_segno,tupcount from gp_toolkit.__gp_aocsseg('ao_blkdir_test_rowcount') where segment_id = 0;
- segno | column_num | physical_segno | tupcount 
--------+------------+----------------+----------
- 1     | 0          | 1              | 0        
- 1     | 1          | 129            | 0        
- 1     | 2          | 257            | 0        
- 1     | 3          | 385            | 0        
- 2     | 0          | 2              | 0        
- 2     | 1          | 130            | 0        
- 2     | 2          | 258            | 0        
- 2     | 3          | 386            | 0        
- 3     | 0          | 3              | 6000     
- 3     | 1          | 131            | 6000     
- 3     | 2          | 259            | 6000     
- 3     | 3          | 387            | 6000     
- 4     | 0          | 4              | 0        
- 4     | 1          | 132            | 0        
- 4     | 2          | 260            | 0        
- 4     | 3          | 388            | 0        
- 5     | 0          | 5              | 0        
- 5     | 1          | 133            | 0        
- 5     | 2          | 261            | 0        
- 5     | 3          | 389            | 0        
-(20 rows)
-
-select (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).segno, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).columngroup_no, (gp_toolkit.__gp_aoblkdir('ao_blkdir_test_rowcount')).row_count from gp_dist_random('gp_id') where gp_segment_id = 0;
- segno | columngroup_no | row_count 
--------+----------------+-----------
- 3     | 0              | 6000      
- 3     | 1              | 6000      
- 3     | 2              | 4675      
- 3     | 2              | 1325      
- 3     | 3              | 4675      
- 3     | 3              | 1325      
-(6 rows)
-
-drop table ao_blkdir_test_rowcount;
+-- Case2: with VACUUM ANALYZE
+DROP TABLE aoco_blkdir_test_rowcount;
 DROP
+CREATE TABLE aoco_blkdir_test_rowcount(i int, j int) USING ao_column DISTRIBUTED BY (j);
+CREATE
+CREATE INDEX aoco_blkdir_test_rowcount_idx ON aoco_blkdir_test_rowcount(i);
+CREATE
+1: BEGIN;
+BEGIN
+2: BEGIN;
+BEGIN
+3: BEGIN;
+BEGIN
+4: BEGIN;
+BEGIN
+1: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 2 FROM generate_series(1, 10) i;
+INSERT 10
+1: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 2 FROM aoco_blkdir_test_rowcount;
+INSERT 10
+1: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 2 FROM aoco_blkdir_test_rowcount;
+INSERT 20
+2: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 3 FROM generate_series(1, 20) i;
+INSERT 20
+2: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 3 FROM aoco_blkdir_test_rowcount;
+INSERT 20
+2: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 3 FROM aoco_blkdir_test_rowcount;
+INSERT 40
+3: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 4 FROM generate_series(1, 30) i;
+INSERT 30
+3: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 4 FROM aoco_blkdir_test_rowcount;
+INSERT 30
+3: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 4 FROM aoco_blkdir_test_rowcount;
+INSERT 60
+4: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 7 FROM generate_series(1, 50) i;
+INSERT 50
+4: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 7 FROM aoco_blkdir_test_rowcount;
+INSERT 50
+4: INSERT INTO aoco_blkdir_test_rowcount SELECT i, 7 FROM aoco_blkdir_test_rowcount;
+INSERT 100
+1: COMMIT;
+COMMIT
+2: COMMIT;
+COMMIT
+3: ABORT;
+ABORT
+4: COMMIT;
+COMMIT
 
-drop function test_aoblkdir_rowcount;
+DELETE FROM aoco_blkdir_test_rowcount WHERE j = 7;
+DELETE 200
+VACUUM ANALYZE aoco_blkdir_test_rowcount;
+VACUUM
+
+SELECT segno, columngroup_no, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('aoco_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno, columngroup_no;
+ segno | columngroup_no | totalrows 
+-------+----------------+-----------
+ 1     | 0              | 40        
+ 1     | 1              | 40        
+ 2     | 0              | 80        
+ 2     | 1              | 80        
+(4 rows)
+SELECT segno, column_num, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aocsseg('aoco_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno, column_num;
+ segno | column_num | totalrows 
+-------+------------+-----------
+ 1     | 0          | 40        
+ 1     | 1          | 40        
+ 2     | 0          | 80        
+ 2     | 1          | 80        
+ 3     | 0          | 0         
+ 3     | 1          | 0         
+ 4     | 0          | 0         
+ 4     | 1          | 0         
+(8 rows)
+
+UPDATE aoco_blkdir_test_rowcount SET i = i + 1;
+UPDATE 120
+VACUUM ANALYZE aoco_blkdir_test_rowcount;
+VACUUM
+
+SELECT segno, columngroup_no, sum(row_count) AS totalrows FROM (SELECT (gp_toolkit.__gp_aoblkdir('aoco_blkdir_test_rowcount')).* FROM gp_dist_random('gp_id') WHERE gp_segment_id = 0)s GROUP BY segno, columngroup_no ORDER BY segno, columngroup_no;
+ segno | columngroup_no | totalrows 
+-------+----------------+-----------
+ 3     | 0              | 120       
+ 3     | 1              | 120       
+(2 rows)
+SELECT segno, column_num, sum(tupcount) AS totalrows FROM gp_toolkit.__gp_aocsseg('aoco_blkdir_test_rowcount') WHERE segment_id = 0 GROUP BY segno, column_num;
+ segno | column_num | totalrows 
+-------+------------+-----------
+ 1     | 0          | 0         
+ 1     | 1          | 0         
+ 2     | 0          | 0         
+ 2     | 1          | 0         
+ 3     | 0          | 120       
+ 3     | 1          | 120       
+ 4     | 0          | 0         
+ 4     | 1          | 0         
+(8 rows)
+
+DROP TABLE aoco_blkdir_test_rowcount;
 DROP
