@@ -1090,14 +1090,14 @@ appendonly_locate_target_segment(AppendOnlyScanDesc scan, int64 targrow)
 		if (rowcount <= 0)
 			continue;
 
-		if (scan->nextrow + rowcount - 1 >= targrow)
+		if (scan->segfirstrow + rowcount - 1 >= targrow)
 		{
 			/* found the target segment */
 			return i;
 		}
 
 		/* continue next segment */
-		scan->nextrow += rowcount;
+		scan->segfirstrow += rowcount;
 		scan->segrowsprocessed = 0;
 	}
 
@@ -1276,14 +1276,14 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	blkdir->currentSegmentFileInfo = blkdir->segmentFileInfo[segidx];
 
 	/*
-	 * "nextrow" should be always pointing to the first row of
+	 * "segfirstrow" should be always pointing to the first row of
 	 * a new segfile in blkdir based ANALYZE, only locate_target_segment
 	 * could update its value.
 	 * 
 	 * "segrowsprocessed" is used for tracking the position of
 	 * processed rows in the current segfile.
 	 */
-	rowsprocessed = scan->nextrow + scan->segrowsprocessed;
+	rowsprocessed = scan->segfirstrow + scan->segrowsprocessed;
 	/* locate the target row by seqscan block directory */
 	rownum = AOBlkDirScan_GetRowNum(scan->blkdirscan,
 									segno,
@@ -1293,7 +1293,7 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	if (rownum < 0)
 		return false;
 
-	scan->segrowsprocessed = rowsprocessed - scan->nextrow;
+	scan->segrowsprocessed = rowsprocessed - scan->segfirstrow;
 
 	/* form the target tuple TID */
 	AOTupleIdInit(&aotid, segno, rownum);
@@ -1335,12 +1335,12 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 	if (segno < 0)
 		return false;
 
-	rowsprocessed = aoscan->nextrow + aoscan->segrowsprocessed;
+	rowsprocessed = aoscan->segfirstrow + aoscan->segrowsprocessed;
 
 	if (!appendonly_getblock(aoscan, targrow, &rowsprocessed))
 		return false;
 
-	aoscan->segrowsprocessed = rowsprocessed - aoscan->nextrow;
+	aoscan->segrowsprocessed = rowsprocessed - aoscan->segfirstrow;
 
 	Assert(rowsprocessed + varblock->rowCount - 1 >= targrow);
 	rownum = varblock->blockFirstRowNum + (targrow - rowsprocessed);
@@ -1703,7 +1703,7 @@ appendonly_beginrangescan_internal(Relation relation,
 	if ((flags & SO_TYPE_ANALYZE) != 0)
 	{
 		scan->segrowsprocessed = 0;
-		scan->nextrow = 0;
+		scan->segfirstrow = 0;
 		scan->targrow = 0;
 	}
 

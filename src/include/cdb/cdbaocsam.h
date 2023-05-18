@@ -174,16 +174,16 @@ typedef struct AOCSScanDescData
 	int64			targrow;
 
 	/*
-	 * nextrow: pointing to the next starting row which is used to check
+	 * segfirstrow: pointing to the next starting row which is used to check
 	 * the distance to `targrow`
 	 */
-	int64			nextrow;
+	int64			segfirstrow;
 
 	/*
 	 * segrowsprocessed: track the rows processed under the current segfile.
-	 * Don't miss updating it accordingly when "nextrow" is updated.
+	 * Don't miss updating it accordingly when "segfirstrow" is updated.
 	 */
-	int64 segrowsprocessed;
+	int64			segrowsprocessed;
 
 	AOBlkDirScan	blkdirscan;
 	AOCSFetchDesc	aocsfetch;

@@ -595,7 +595,7 @@ aocs_beginscan_internal(Relation relation,
 
 	if ((flags & SO_TYPE_ANALYZE) != 0)
 	{
-		scan->nextrow = 0;
+		scan->segfirstrow = 0;
 		scan->targrow = 0;
 	}
 
@@ -698,14 +698,14 @@ aocs_locate_target_segment(AOCSScanDesc scan, int64 targrow)
 		if (rowcount <= 0)
 			continue;
 
-		if (scan->nextrow + rowcount - 1 >= targrow)
+		if (scan->segfirstrow + rowcount - 1 >= targrow)
 		{
 			/* found the target segment */
 			return i;
 		}
 
 		/* continue next segment */
-		scan->nextrow += rowcount;
+		scan->segfirstrow += rowcount;
 		scan->segrowsprocessed = 0;
 	}
 
@@ -769,14 +769,14 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	for (int col = 0; col < ncols; col++)
 	{
 		/*
-		 * "nextrow" should be always pointing to the first row of
+		 * "segfirstrow" should be always pointing to the first row of
 		 * a new segfile, only locate_target_segment could update
 		 * its value.
 		 * 
 		 * "segrowsprocessed" is used for tracking the position of
 		 * processed rows in the current segfile.
 		 */
-		rowsprocessed = scan->nextrow + scan->segrowsprocessed;
+		rowsprocessed = scan->segfirstrow + scan->segrowsprocessed;
 
 		if ((scan->rs_base.rs_rd)->rd_att->attrs[col].attisdropped)
 			continue;
@@ -789,7 +789,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 		if (rownum < 0)
 			continue;
 
-		scan->segrowsprocessed = rowsprocessed - scan->nextrow;
+		scan->segrowsprocessed = rowsprocessed - scan->segfirstrow;
 		break;
 	}
 
@@ -880,14 +880,14 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 	ExecClearTuple(slot);
 
-	rowstoprocess = targrow - scan->nextrow + 1;
+	rowstoprocess = targrow - scan->segfirstrow + 1;
 
 	/* read from scan->cur_seg */
 	for (AttrNumber i = 0; i < scan->columnScanInfo.num_proj_atts; i++)
 	{
 		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
-		int64 startrow = scan->nextrow + scan->segrowsprocessed;
+		int64 startrow = scan->segfirstrow + scan->segrowsprocessed;
 
 		if (ds->blockRowCount <= 0)
 			; /* haven't read block */
@@ -921,7 +921,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		while (true)
 		{
 			elog(DEBUG1, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
-				 "nextrow: %ld, rowcount: %ld, segrowsprocessed: %ld, nth: %d, "
+				 "segfirstrow: %ld, rowcount: %ld, segrowsprocessed: %ld, nth: %d, "
 				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				 startrow+ rowcount - 1 - targrow, startrow, rowcount,
 				 scan->segrowsprocessed, datumstreamread_nth(ds), ds->blockRowCount,
