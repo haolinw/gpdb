@@ -139,6 +139,9 @@ typedef struct AppendOnlyBlockDirectory
 
 	/*
 	 * Minipage entry number, for caching purpose.
+	 *
+	 * XXX: scenarios which call AppendOnlyBlockDirectory_GetEntry()
+	 * may need to consider using this cache.
 	 */
 	int cached_mpentry_num;
 

@@ -1168,7 +1168,7 @@ appendonly_block_remaining_rows(AppendOnlyScanDesc scan)
 /*
  * locates the block in which `targrow` exists
  */
-static bool
+static void
 appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 {
 	AppendOnlyExecutorReadBlock *varblock = &scan->executorReadBlock;
@@ -1183,7 +1183,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 		if (*startrow + rowcount - 1 >= targrow)
 		{
 			/* row lies in current block, nothing to do */
-			return true;
+			return;
 		}
 		else
 		{
@@ -1197,7 +1197,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 	 * Keep reading block headers until we find the block containing
 	 * the target row.
 	 */
-	while (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, varblock))
+	while (true)
 	{
 		elog(DEBUG1, "appendonly_getblock(): [targrow: %ld, currow: %ld, diff: %ld, "
 			 "startrow: %ld, rowcount: %ld, segrowsprocessed: %ld, blockRowsProcessed: %ld, "
@@ -1206,27 +1206,28 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 			 scan->segrowsprocessed, varblock->blockRowsProcessed,
 			 varblock->rowCount);
 
-		/* new block, reset blockRowsProcessed */
-		varblock->blockRowsProcessed = 0;
-		rowcount = appendonly_block_remaining_rows(scan);
-		Assert(rowcount > 0);
-		if (*startrow + rowcount - 1 >= targrow)
+		if (AppendOnlyExecutorReadBlock_GetBlockInfo(&scan->storageRead, varblock))
 		{
-			AppendOnlyExecutorReadBlock_GetContents(varblock);
-			/* got a new buffer to consume */
-			scan->needNextBuffer = false;
-			return true;
+			/* new block, reset blockRowsProcessed */
+			varblock->blockRowsProcessed = 0;
+			rowcount = appendonly_block_remaining_rows(scan);
+			Assert(rowcount > 0);
+			if (*startrow + rowcount - 1 >= targrow)
+			{
+				AppendOnlyExecutorReadBlock_GetContents(varblock);
+				/* got a new buffer to consume */
+				scan->needNextBuffer = false;
+				return;
+			}
+
+			*startrow += rowcount;
+			AppendOnlyExecutionReadBlock_FinishedScanBlock(varblock);
+			AppendOnlyStorageRead_SkipCurrentBlock(&scan->storageRead);
+			/* continue next block */
 		}
-
-		*startrow += rowcount;
-		AppendOnlyExecutionReadBlock_FinishedScanBlock(varblock);
-		AppendOnlyStorageRead_SkipCurrentBlock(&scan->storageRead);
-		/* continue next block */
+		else
+			pg_unreachable(); /* unreachable code */
 	}
-
-	pg_unreachable(); /* unreachable code */
-
-	return false;
 }
 
 /*
@@ -1337,8 +1338,7 @@ appendonly_get_target_tuple(AppendOnlyScanDesc aoscan, int64 targrow, TupleTable
 
 	rowsprocessed = aoscan->segfirstrow + aoscan->segrowsprocessed;
 
-	if (!appendonly_getblock(aoscan, targrow, &rowsprocessed))
-		return false;
+	appendonly_getblock(aoscan, targrow, &rowsprocessed);
 
 	aoscan->segrowsprocessed = rowsprocessed - aoscan->segfirstrow;
 
@@ -1387,7 +1387,7 @@ appendonlygettup(AppendOnlyScanDesc scan,
 				 TupleTableSlot *slot)
 {
 	Assert(ScanDirectionIsForward(dir));
-	/* should not be in ANALYZE */
+	/* should not be in ANALYZE - we use a different API */
 	Assert((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) == 0);
 	Assert(scan->usableBlockSize > 0);
 

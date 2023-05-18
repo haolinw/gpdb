@@ -790,6 +790,12 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 			continue;
 
 		scan->segrowsprocessed = rowsprocessed - scan->segfirstrow;
+
+		/*
+		 * Found a column represented in the block directory.
+		 * Here we just look for the 1st such column, no need
+		 * to read other columns within the same row.
+		 */
 		break;
 	}
 
@@ -1077,7 +1083,7 @@ aocs_getnext(AOCSScanDesc scan, ScanDirection direction, TupleTableSlot *slot)
 
 	Assert(ScanDirectionIsForward(direction));
 
-	/* should not be in ANALYZE */
+	/* should not be in ANALYZE - we use a different API */
 	Assert((scan->rs_base.rs_flags & SO_TYPE_ANALYZE) == 0);
 
 	if (scan->columnScanInfo.relationTupleDesc == NULL)

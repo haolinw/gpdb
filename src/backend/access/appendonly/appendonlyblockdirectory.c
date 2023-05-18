@@ -1800,7 +1800,7 @@ AOBlkDirScan_GetRowNum(AOBlkDirScan blkdirscan,
 														 scankeys);
 		blkdirscan->segno = targsegno;
 		blkdirscan->colgroupno = colgroupno;
-		/* reset to InvalidEntryNum for new Minipage entry array */
+		/* reset to InvalidEntryNum for new Minipage entry array indexing */
 		blkdir->cached_mpentry_num = InvalidEntryNum;
 	}
 
