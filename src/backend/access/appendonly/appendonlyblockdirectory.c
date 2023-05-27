@@ -64,6 +64,8 @@ static bool blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 								AOTupleId *aoTupleId,
 								int columnGroupNo);
 
+static int findFileSegInfo(AppendOnlyBlockDirectory *blockDirectory,
+						   int segmentFileNum);
 void
 AppendOnlyBlockDirectoryEntry_GetBeginRange(
 											AppendOnlyBlockDirectoryEntry *directoryEntry,
@@ -634,6 +636,7 @@ AppendOnlyBlockDirectory_GetEntry(
 	ScanKey		scanKeys = blockDirectory->scanKeys;
 
 	TupleDesc	heapTupleDesc;
+	int 		fsInfoIdx;
 	FileSegInfo *fsInfo = NULL;
 	SysScanDesc idxScanDesc;
 	HeapTuple	tuple = NULL;
@@ -731,16 +734,8 @@ AppendOnlyBlockDirectory_GetEntry(
 		}
 	}
 
-	for (int i = 0; i < blockDirectory->totalSegfiles; i++)
-	{
-		fsInfo = blockDirectory->segmentFileInfo[i];
-
-		if (!blockDirectory->isAOCol && segmentFileNum == fsInfo->segno)
-			break;
-		else if (blockDirectory->isAOCol && segmentFileNum ==
-				 ((AOCSFileSegInfo *) fsInfo)->segno)
-			break;
-	}
+	fsInfoIdx = findFileSegInfo(blockDirectory, segmentFileNum);
+	fsInfo = blockDirectory->segmentFileInfo[fsInfoIdx];
 
 	Assert(fsInfo != NULL);
 
@@ -849,6 +844,148 @@ AppendOnlyBlockDirectory_GetEntry(
 	}
 
 	return false;
+}
+
+/*
+ * Using the block directory, figure out the (segfile, offset) from which we
+ * should start scanning, given the first tuple we want scanned is from the
+ * logical heap block 'blkno'.
+ *
+ * To support ao_column tables, we also have the 'columnGroupNo' argument to get
+ * the coordinates to start the scan for a particular column (for ao_row tables,
+ * this is always trivially 0).
+ *
+ * When the routine returns, 'fsInfoIdx' and 'dirEntry' capture the
+ * (segfile, offset) information that we need.
+ *
+ * We perform a sysscan of the block directory to find the block directory row
+ * that encompasses the first possible row in 'blkno' (we call it
+ * rangeFirstRowNum). Thereafter, like AppendOnlyBlockDirectory_GetEntry(), we
+ * extract the minipage from that block directory row, and search for the entry.
+ *
+ * Note: There may be holes into which rangeFirstRowNum may fall, in which case
+ * we will point to the last block directory entry which has a lower firstRowNum
+ * than rangeFirstRowNum. That entry would represent a safe starting point for
+ * the scan, which would be as close as we can get to our target. In the off
+ * chance that hole is at the beginning of the segfile, we return false.
+ *
+ * Note: We could return a minipage entry whose fileOffset is beyond the eof of
+ * the file, in case the entry is out of sync with the seginfo. We will handle
+ * that later, while positioning the scan. We return true in this case.
+ */
+
+bool
+AppendOnlyBlockDirectory_GetEntryForPartialScan(AppendOnlyBlockDirectory *blockDirectory,
+												BlockNumber blkno,
+												int columnGroupNo,
+												AppendOnlyBlockDirectoryEntry *dirEntry,
+												int *fsInfoIdx)
+{
+	int			segmentFileNum;
+	BlockNumber segStartBlk;
+	uint64 		rangeFirstRowNum;
+	Relation	blkdirRel;
+	Relation	blkdirIdx;
+	ScanKey 	scanKeys;
+	SysScanDesc idxScanDesc;
+	HeapTuple	tuple = NULL;
+	FileSegInfo *fsInfo = NULL;
+	TupleDesc 	tupleDesc;
+
+	Assert(blockDirectory);
+	Assert(RelationIsValid(blockDirectory->blkdirRel));
+	Assert(RelationIsValid(blockDirectory->blkdirIdx));
+	Assert(blkno != InvalidBlockNumber);
+	Assert(columnGroupNo >= 0 && columnGroupNo < blockDirectory->numColumnGroups);
+	Assert(dirEntry);
+
+	blkdirRel = blockDirectory->blkdirRel;
+	blkdirIdx = blockDirectory->blkdirIdx;
+	segmentFileNum = AOSegmentGet_segno(blkno);
+	segStartBlk = AOHeapBlockGet_startHeapBlock(blkno);
+	rangeFirstRowNum = (blkno - segStartBlk) * AO_MAX_TUPLES_PER_HEAP_BLOCK + 1;
+	scanKeys = blockDirectory->scanKeys;
+
+	ereportif(Debug_appendonly_print_blockdirectory, LOG,
+			  (errmsg("Append-only block directory get entry for partial scan: "
+					  "(columnGroupNo, segmentFileNum, rangeFirstRowNum) = "
+					  "(%d, %d, " INT64_FORMAT ")",
+				  columnGroupNo, segmentFileNum, rangeFirstRowNum)));
+
+	/*
+	 * Set up the scan keys values. The keys have already been set up in
+	 * init_internal() with the following strategy:
+	 * (=segmentFileNum, =columnGroupNo, <=rowNum)
+	 * See init_internal().
+	 */
+	Assert(scanKeys != NULL);
+	scanKeys[0].sk_argument = Int32GetDatum(segmentFileNum);
+	scanKeys[1].sk_argument = Int32GetDatum(columnGroupNo);
+	scanKeys[2].sk_argument = Int64GetDatum(rangeFirstRowNum);
+
+	*fsInfoIdx = findFileSegInfo(blockDirectory, segmentFileNum);
+	fsInfo = blockDirectory->segmentFileInfo[*fsInfoIdx];
+
+	tupleDesc = RelationGetDescr(blkdirRel);
+	idxScanDesc = systable_beginscan_ordered(blkdirRel, blkdirIdx,
+											 blockDirectory->appendOnlyMetaDataSnapshot,
+											 3, scanKeys);
+	tuple = systable_getnext_ordered(idxScanDesc, BackwardScanDirection);
+
+	if (!tuple)
+	{
+		SIMPLE_FAULT_INJECTOR("AppendOnlyBlockDirectory_PartialScan_hole_at_start");
+		systable_endscan_ordered(idxScanDesc);
+		return false;
+	}
+	else
+	{
+		MinipagePerColumnGroup 	*minipageInfo;
+		Minipage 				*minipage;
+		int 					entry_no = 0;
+		int 					result_entry_no;
+
+		blockDirectory->currentSegmentFileNum = segmentFileNum;
+		blockDirectory->currentSegmentFileInfo = fsInfo;
+
+		extract_minipage(blockDirectory,
+						 tuple,
+						 tupleDesc,
+						 columnGroupNo);
+		minipageInfo = &blockDirectory->minipages[columnGroupNo];
+		minipage = minipageInfo->minipage;
+
+		systable_endscan_ordered(idxScanDesc);
+
+		if (minipageInfo->numMinipageEntries == 0)
+			return false;
+
+		/* Find 1st entry with firstRowNum greater than rangeFirstRowNum */
+		while (entry_no < minipageInfo->numMinipageEntries &&
+				minipage->entry[entry_no].firstRowNum <= rangeFirstRowNum)
+			entry_no++;
+
+		Assert(entry_no >= 1);
+
+		/*
+		 * The previous entry is where we shall start our scan from. This is
+		 * where either the rangeFirstRowNum lies, or rangeFirstRowNum falls in
+		 * a hole that starts after the previous entry ends.
+		 * Either way, it is safe to start the scan from this previous entry.
+		 */
+		result_entry_no = entry_no - 1;
+
+		/*
+		 * We ignore the return value of set_directoryentry_range(). Even if
+		 * the dirEntry's fileOffset points past the eof, it is okay. We will
+		 * handle that later.
+		 */
+		set_directoryentry_range(blockDirectory,
+								 columnGroupNo,
+								 result_entry_no,
+								 dirEntry);
+		return true;
+	}
 }
 
 /*
@@ -1873,4 +2010,30 @@ out:
 	blkdir->cached_mpentry_num = mpentryi;
 
 	return rownum;
+}
+
+/*
+ * Locate the index of the fileseginfo struct in the block directory's fileseg
+ * array, given a 'segmentFileNum'.
+ */
+static int
+findFileSegInfo(AppendOnlyBlockDirectory *blockDirectory, int segmentFileNum)
+{
+	FileSegInfo *fsInfo;
+	int 		i;
+	Assert(segmentFileNum != InvalidFileSegNumber &&
+		segmentFileNum <= AOTupleId_MaxSegmentFileNum);
+
+	for (i = 0; i < blockDirectory->totalSegfiles; i++)
+	{
+		fsInfo = blockDirectory->segmentFileInfo[i];
+
+		if (!blockDirectory->isAOCol && segmentFileNum == fsInfo->segno)
+			break;
+		else if (blockDirectory->isAOCol && segmentFileNum ==
+			((AOCSFileSegInfo *) fsInfo)->segno)
+			break;
+	}
+
+	return i;
 }
