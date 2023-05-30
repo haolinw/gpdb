@@ -674,6 +674,7 @@ aocs_positionscan(AOCSScanDesc scan,
 	int64 			beginFileOffset = dirEntry->range.fileOffset;
 	int64 			afterFileOffset = dirEntry->range.afterFileOffset;
 	DatumStreamRead *ds;
+	int dsIdx;
 
 	Assert(colIdx >= 0 && colIdx < scan->columnScanInfo.num_proj_atts);
 	Assert(dirEntry);
@@ -696,7 +697,10 @@ aocs_positionscan(AOCSScanDesc scan,
 		}
 	}
 
-	ds = scan->columnScanInfo.ds[colIdx];
+	/* The datum stream array is always of length relnatts */
+	dsIdx = scan->columnScanInfo.proj_atts[colIdx];
+	Assert(dsIdx >= 0 && dsIdx < RelationGetNumberOfAttributes(scan->rs_base.rs_rd));
+	ds = scan->columnScanInfo.ds[dsIdx];
 
 	if (beginFileOffset > ds->ao_read.logicalEof)
 	{
