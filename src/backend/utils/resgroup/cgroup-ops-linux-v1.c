@@ -19,6 +19,7 @@
 #include "cdb/cdbvars.h"
 #include "miscadmin.h"
 #include "utils/cgroup.h"
+#include "utils/elog.h"
 #include "utils/resgroup.h"
 #include "utils/cgroup-ops-v1.h"
 #include "utils/vmem_tracker.h"
@@ -171,7 +172,9 @@ static int64 getcpuusage_v1(Oid group);
 static void getcpuset_v1(Oid group, char *cpuset, int len);
 static void setcpuset_v1(Oid group, const char *cpuset);
 static float convertcpuusage_v1(int64 usage, int64 duration);
-static void setio_v1(Oid group, const char *io_max);
+static List *parseio_v1(const char *io_limit);
+static void setio_v1(Oid group, List *limit_list);
+static void freeio_v1(List *limit_list);
 
 /*
  * Detect gpdb cgroup component dirs.
@@ -1106,10 +1109,29 @@ getmemoryusage_v1(Oid group)
 	return readInt64(group, BASEDIR_GPDB, component, "memory.usage_in_bytes");
 }
 
-static void
-setio_v1(Oid group, const char *io_max)
+static List*
+parseio_v1(const char *io_limit)
 {
-	elog(WARNING, "group v1 doesn't support io limit, io limitations will be ignored");
+	ereport(ERROR,
+			(errcode(ERRCODE_SYSTEM_ERROR),
+			 errmsg("resource group io limit only can be used in cgroup v2.")));
+	return NULL;
+}
+
+static void
+setio_v1(Oid group, List *limit_list)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_SYSTEM_ERROR),
+			 errmsg("resource group io limit only can be used in cgroup v2.")));
+}
+
+static void
+freeio_v1(List *limit_list)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_SYSTEM_ERROR),
+			 errmsg("resource group io limit only can be used in cgroup v2.")));
 }
 
 static CGroupOpsRoutine cGroupOpsRoutineV1 = {
@@ -1137,7 +1159,9 @@ static CGroupOpsRoutine cGroupOpsRoutineV1 = {
 
 		.getmemoryusage = getmemoryusage_v1,
 
+		.parseio = parseio_v1,
 		.setio = setio_v1,
+		.freeio = freeio_v1,
 };
 
 CGroupOpsRoutine *get_group_routine_v1(void)

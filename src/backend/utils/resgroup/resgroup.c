@@ -531,8 +531,8 @@ InitResGroups(void)
 
 		cgroupOpsRoutine->createcgroup(groupId);
 
-		SetupIOLimit(groupId, caps.ioTblspcConfigs);
-		FreeIOLimit(&caps);
+		if (caps.io_limit != NULL)
+			cgroupOpsRoutine->setio(groupId, cgroupOpsRoutine->parseio(caps.io_limit));
 
 		if (CpusetIsEmpty(caps.cpuset))
 		{
@@ -838,11 +838,7 @@ ResGroupAlterOnCommit(const ResourceGroupCallbackContext *callbackCtx)
 		}
 		else if (callbackCtx->limittype == RESGROUP_LIMIT_TYPE_IO_LIMIT)
 		{
-			if (Gp_resource_manager_policy == RESOURCE_MANAGER_POLICY_GROUP_V2)
-			{
-				SetupIOLimit(callbackCtx->groupid, callbackCtx->caps.ioTblspcConfigs);
-				FreeIOLimit(&callbackCtx->caps);
-			}
+			cgroupOpsRoutine->setio(callbackCtx->groupid, callbackCtx->ioLimit);
 		}
 
 		/* reset default group if cpuset has changed */
@@ -1015,7 +1011,6 @@ createGroup(Oid groupId, const ResGroupCaps *caps)
 
 	/* remove local pointers */
 	group->caps.io_limit = NULL;
-	group->caps.ioTblspcConfigs = NULL;
 
 	group->nRunning = 0;
 	group->nRunningBypassed = 0;

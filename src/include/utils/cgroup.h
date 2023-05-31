@@ -65,6 +65,7 @@ typedef enum
 	CGROUP_COMPONENT_CPUACCT,
 	CGROUP_COMPONENT_CPUSET,
 	CGROUP_COMPONENT_MEMORY,
+	CGROUP_COMPONENT_IO,
 
 	CGROUP_COMPONENT_COUNT,
 } CGroupComponentType;
@@ -227,7 +228,10 @@ typedef void (*setcpuset_function) (Oid group, const char *cpuset);
 /* Convert the cpu usage to percentage within the duration. */
 typedef float (*convertcpuusage_function) (int64 usage, int64 duration);
 
-typedef void (*setio_function) (Oid group, const char *io_max);
+typedef List* (*parseio_function) (const char *io_limit);
+typedef void (*setio_function) (Oid group, List *limit_list);
+typedef void (*freeio_function) (List *limit_list);
+
 
 typedef struct CGroupOpsRoutine
 {
@@ -261,7 +265,9 @@ typedef struct CGroupOpsRoutine
 
 	convertcpuusage_function convertcpuusage;
 
+	parseio_function		parseio;
 	setio_function			setio;
+	freeio_function			freeio;
 } CGroupOpsRoutine;
 
 /* The global function handler. */
