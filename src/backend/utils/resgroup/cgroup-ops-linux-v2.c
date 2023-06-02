@@ -87,6 +87,11 @@ typedef dev_t bdi_t;
 
 /*
  * IOconfig represents the io.max of cgroup v2 io controller.
+ * Fiels: each field correspond to cgroup v2 io.max file.
+ *	rbps: read bytes per second
+ *	wbps: write bytes per second
+ *	riops: read iops
+ *	wiops: write iops
  */
 typedef struct IOconifg IOconfig;
 struct IOconifg
