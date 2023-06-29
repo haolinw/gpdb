@@ -3761,8 +3761,11 @@ void
 ProcessInterrupts(const char* filename, int lineno)
 {
 	/* OK to accept any interrupts now? */
-	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
+	if (InterruptHoldoffCount != 0 || CritSectionCount != 0) { // TODO
+		if (InterruptHoldoffCount != 0 && tmpInterruptHoldoffCount != 0)
+			Assert(0);
 		return;
+	}
 	InterruptPending = false;
 
 	if (ProcDiePending)

@@ -820,9 +820,9 @@ LockErrorCleanup(void)
 	if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled() &&
 		LOCALLOCK_LOCKMETHOD(*lockAwaited) == RESOURCE_LOCKMETHOD)
 	{
-		Assert(0); // TODO
+		tmpInterruptHoldoffCount = InterruptHoldoffCount; // TODO
 
-		RESUME_INTERRUPTS();
+		// RESUME_INTERRUPTS();
 		return;
 	}
 

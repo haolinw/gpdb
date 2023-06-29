@@ -95,6 +95,7 @@ extern PGDLLIMPORT volatile bool ImmediateInterruptOK;
 extern PGDLLIMPORT volatile bool ImmediateDieOK;
 extern PGDLLIMPORT volatile bool TermSignalReceived;
 extern PGDLLIMPORT volatile int32 InterruptHoldoffCount;
+extern PGDLLIMPORT volatile int32 tmpInterruptHoldoffCount; // TODO
 extern PGDLLIMPORT volatile int32 QueryCancelHoldoffCount;
 extern PGDLLIMPORT volatile int32 CritSectionCount;
 
