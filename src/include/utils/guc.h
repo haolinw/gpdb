@@ -596,6 +596,8 @@ extern char  *gp_default_storage_options;
 
 extern bool gp_quicklz_fallback;
 
+extern bool gp_enable_fixed_size_read;
+
 /* copy GUC */
 extern bool gp_enable_segment_copy_checking;
 

@@ -422,6 +422,8 @@ char	   *gp_default_storage_options = NULL;
 /* Fall back to using zstd if quicklz compresstpye specified */
 bool		gp_quicklz_fallback = false;
 
+bool		gp_enable_fixed_size_read = false;
+
 int			writable_external_table_bufsize = 64;
 
 bool		gp_external_enable_filter_pushdown = true;
@@ -2981,6 +2983,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		 NULL,
 		},
 		&gp_quicklz_fallback,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_enable_fixed_size_read", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Enable fixed size (64k) read."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_fixed_size_read,
 		false,
 		NULL, NULL, NULL
 	},

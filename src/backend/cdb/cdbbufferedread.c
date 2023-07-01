@@ -200,16 +200,34 @@ BufferedReadIo(
 		}
 
 		if (actualLen == 0)
+		{
+			if (gp_enable_fixed_size_read)
+			{
+				ereport(WARNING, (errcode_for_file_access(),
+								errmsg("read beyond eof in table \"%s\" file \"%s\", "
+									"read position " INT64_FORMAT " (small offset %d), "
+									"actual read length %d (large read length %d)",
+									bufferedRead->relationName,
+									bufferedRead->filePathName,
+									bufferedRead->largeReadPosition,
+									offset,
+									actualLen,
+									bufferedRead->largeReadLen)));
+				break;
+			}
+
 			ereport(ERROR, (errcode_for_file_access(),
-							errmsg("read beyond eof in table \"%s\" file \"%s\", "
-								   "read position " INT64_FORMAT " (small offset %d), "
-								   "actual read length %d (large read length %d)",
-								   bufferedRead->relationName,
-								   bufferedRead->filePathName,
-								   bufferedRead->largeReadPosition,
-								   offset,
-								   actualLen,
-								   bufferedRead->largeReadLen)));
+					errmsg("read beyond eof in table \"%s\" file \"%s\", "
+						"read position " INT64_FORMAT " (small offset %d), "
+						"actual read length %d (large read length %d)",
+						bufferedRead->relationName,
+						bufferedRead->filePathName,
+						bufferedRead->largeReadPosition,
+						offset,
+						actualLen,
+						bufferedRead->largeReadLen)));
+
+		}
 		else if (actualLen < 0)
 			ereport(ERROR, (errcode_for_file_access(),
 							errmsg("unable to read table \"%s\" file \"%s\", "
@@ -426,6 +444,7 @@ BufferedReadSetTemporaryRange(
 		 */
 		bufferedRead->fileOff = beginFileOffset;
 		bufferedRead->bufferOffset = 0;
+		bufferedRead->largeReadPosition = beginFileOffset;
 
 		remainingFileLen = afterFileOffset - beginFileOffset;
 		if (remainingFileLen > bufferedRead->maxLargeReadLen)
@@ -433,10 +452,29 @@ BufferedReadSetTemporaryRange(
 		else
 			bufferedRead->largeReadLen = (int32) remainingFileLen;
 
-		bufferedRead->largeReadPosition = beginFileOffset;
+		if (!gp_enable_fixed_size_read)
+		{
+			if (bufferedRead->largeReadLen > 0)
+				BufferedReadIo(bufferedRead);
+		}
+		else
+		{
+			bufferedRead->largeReadLen = (int32) remainingFileLen;
+			if (remainingFileLen > 0)
+				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
 
-		if (bufferedRead->largeReadLen > 0)
-			BufferedReadIo(bufferedRead);
+			if (remainingFileLen >= bufferedRead->maxLargeReadLen)
+				BufferedReadIo(bufferedRead);
+			else if (remainingFileLen > 0)
+			{
+				off_t orig_off = bufferedRead->fileOff;
+
+				BufferedReadIo(bufferedRead);
+
+				bufferedRead->largeReadLen = (int32) remainingFileLen;
+				bufferedRead->fileOff = orig_off + remainingFileLen;
+			}
+		}	
 	}
 
 	bufferedRead->haveTemporaryLimitInEffect = true;
