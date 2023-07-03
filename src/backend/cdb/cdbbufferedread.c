@@ -467,6 +467,8 @@ BufferedReadSetTemporaryRange(
 				BufferedReadIo(bufferedRead);
 			else if (remainingFileLen > 0)
 			{
+				bufferedRead->largeReadLen = (int32) bufferedRead->maxBufferLen;
+ 
 				off_t orig_off = bufferedRead->fileOff;
 
 				BufferedReadIo(bufferedRead);
