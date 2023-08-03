@@ -137,6 +137,15 @@ typedef enum
 	RES_GROUP_STAT_CPU_USAGE,
 } ResGroupStatType;
 
+/* status of target process when move query */
+typedef enum
+{
+	TARGET_NORMAL,
+	TARGET_TRANSACTION_END,
+	TARGET_PROCESSING,
+	TARGET_PROCESSED,
+} MoveQueryTargetProcessStatus;
+
 /*
  * The context to pass to callback in CREATE/ALTER/DROP resource group
  */
@@ -213,9 +222,10 @@ extern bool EnsureCpusetIsAvailable(int elevel);
 extern Oid SessionGetResGroupId(SessionState *session);
 extern void HandleMoveResourceGroup(void);
 extern void ResGroupMoveQuery(int sessionId, Oid groupId, const char *groupName);
-extern Oid ResGroupGetGroupIdBySessionId(int sessionId);
 extern char *getCpuSetByRole(const char *cpuset);
 extern void checkCpuSetByRole(const char *cpuset);
+
+extern void groupReleaseVirtualSlotByGroupID(Oid groupId);
 
 #define LOG_RESGROUP_DEBUG(...) \
 	do {if (Debug_resource_group) elog(__VA_ARGS__); } while(false);

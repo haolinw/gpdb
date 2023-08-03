@@ -4466,6 +4466,65 @@ pgstat_get_backend_current_activity(int pid, bool checkUser)
 }
 
 /* ----------
+ * pgstat_get_backend_current_state() -
+ *
+ *	Return the statue representing the current activity of the backend with
+ *	the specified PID.  This looks directly at the BackendStatusArray,
+ *	and so will provide current information regardless of the age of our
+ *	transaction's snapshot of the status array.
+ * ----------
+ */
+BackendState
+pgstat_get_backend_current_state(int pid)
+{
+	PgBackendStatus *beentry;
+	int			i;
+
+	beentry = BackendStatusArray;
+	for (i = 1; i <= MaxBackends; i++)
+	{
+		/*
+		 * Although we expect the target backend's entry to be stable, that
+		 * doesn't imply that anyone else's is.  To avoid identifying the
+		 * wrong backend, while we check for a match to the desired PID we
+		 * must follow the protocol of retrying if st_changecount changes
+		 * while we examine the entry, or if it's odd.  (This might be
+		 * unnecessary, since fetching or storing an int is almost certainly
+		 * atomic, but let's play it safe.)  We use a volatile pointer here to
+		 * ensure the compiler doesn't try to get cute.
+		 */
+		volatile PgBackendStatus *vbeentry = beentry;
+		bool		found;
+
+		for (;;)
+		{
+			int			before_changecount;
+			int			after_changecount;
+
+			pgstat_begin_read_activity(vbeentry, before_changecount);
+
+			found = (vbeentry->st_procpid == pid);
+
+			pgstat_end_read_activity(vbeentry, after_changecount);
+
+			if (pgstat_read_activity_complete(before_changecount,
+											  after_changecount))
+				break;
+
+			/* Make sure we can break out of loop if stuck... */
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		if (found)
+			return beentry->st_state;
+
+		beentry++;
+	}
+
+	return STATE_UNDEFINED;
+}
+
+/* ----------
  * pgstat_get_crashed_backend_activity() -
  *
  *	Return a string representing the current activity of the backend with

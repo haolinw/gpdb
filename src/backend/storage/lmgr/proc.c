@@ -479,9 +479,8 @@ InitProcess(void)
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
-	MyProc->resSlot = NULL;
+	MyProc->hasVirtualSlot = false;
 	SpinLockInit(&MyProc->movetoMutex);
-	MyProc->movetoResSlot = NULL;
 	MyProc->movetoGroupId = InvalidOid;
 	MyProc->movetoCallerPid = InvalidPid;
 

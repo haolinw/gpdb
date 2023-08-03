@@ -27,7 +27,7 @@ def validate(json_obj, segnum):
       return False
    group = groups[0]
    #validate group keys
-   keys = ["group_id", "nRunning", "locked_for_drop"]
+   keys = ["group_id", "nRunning"]
    for key in keys:
       if key not in group:
          return False

@@ -10,3 +10,4 @@
 # ignores including sub-directories
 autovacuum-analyze.sql
 workfile_mgr_test.sql
+resgroup/resgroup_io_limit.sql

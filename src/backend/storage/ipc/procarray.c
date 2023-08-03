@@ -72,6 +72,7 @@
 #include "utils/faultinjector.h"
 #include "utils/sharedsnapshot.h"
 #include "libpq/libpq-be.h"
+#include "utils/resgroup.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
@@ -5134,8 +5135,7 @@ GetSessionIdByPid(int pid)
  * entrydb. 'isExecutor' helps us to determine a process to which we need to send signal.
  */
 bool
-ResGroupMoveSignalTarget(int sessionId, void *slot, Oid groupId,
-						 bool isExecutor)
+ResGroupMoveSignalTarget(int sessionId, Oid groupId, bool isExecutor)
 {
 	pid_t		pid;
 	BackendId	backendId;
@@ -5178,33 +5178,28 @@ ResGroupMoveSignalTarget(int sessionId, void *slot, Oid groupId,
 		/* only target process needs slot and callerPid to operate */
 		if (Gp_role == GP_ROLE_DISPATCH && proc->mppIsWriter)
 		{
-			/*
-			 * movetoCallerPid is a guard which marks there is currently
-			 * active initiator process
-			 */
-			if (proc->movetoCallerPid != InvalidPid)
+			if (proc->movetoTargetStatus != TARGET_NORMAL &&
+					proc->movetoCallerPid != InvalidPid)
 			{
 				SpinLockRelease(&proc->movetoMutex);
-				elog(NOTICE, "cannot move process, which is already moving");
+				elog(NOTICE, "cannot move target process, which is already moving");
 				break;
 			}
 			Assert(proc->movetoCallerPid == InvalidPid);
-			Assert(proc->movetoResSlot == NULL);
-			Assert(slot != NULL);
-
-			proc->movetoResSlot = slot;
 			proc->movetoCallerPid = MyProc->pid;
+			proc->movetoTargetStatus = TARGET_PROCESSING;
 		}
 		proc->movetoGroupId = groupId;
 		SpinLockRelease(&proc->movetoMutex);
 
 		if (SendProcSignal(pid, PROCSIG_RESOURCE_GROUP_MOVE_QUERY, backendId))
 		{
+			/* Send SIGNAL failed, need to clean */
 			SpinLockAcquire(&proc->movetoMutex);
 			if (Gp_role == GP_ROLE_DISPATCH && proc->mppIsWriter)
 			{
-				proc->movetoResSlot = NULL;
 				proc->movetoCallerPid = InvalidPid;
+				proc->movetoTargetStatus = TARGET_NORMAL;
 			}
 			proc->movetoGroupId = InvalidOid;
 			SpinLockRelease(&proc->movetoMutex);
@@ -5283,17 +5278,16 @@ ResGroupMoveCheckTargetReady(int sessionId, bool *clean, bool *result)
 		 */
 		if (proc->movetoCallerPid == MyProc->pid)
 		{
-			/*
-			 * InvalidOid of movetoGroupId means target process tried to
-			 * handle our command
-			 */
-			if (proc->movetoGroupId == InvalidOid)
+			/* target process has already processed move query command successful. */
+			if (proc->movetoTargetStatus == TARGET_PROCESSED)
 			{
-				/*
-				 * empty movetoResSlot means target process got all the
-				 * control over slot
-				 */
-				*result = (proc->movetoResSlot == NULL);
+				*result = true;
+				*clean = true;
+			}
+			else if (proc->movetoTargetStatus != TARGET_NORMAL)
+			{
+				/* Otherwise, as caller, we release the slot */
+				groupReleaseVirtualSlotByGroupID(proc->movetoGroupId);
 				*clean = true;
 			}
 
@@ -5304,9 +5298,9 @@ ResGroupMoveCheckTargetReady(int sessionId, bool *clean, bool *result)
 			 */
 			if (*clean)
 			{
-				proc->movetoResSlot = NULL;
 				proc->movetoGroupId = InvalidOid;
 				proc->movetoCallerPid = InvalidPid;
+				proc->movetoTargetStatus = TARGET_NORMAL;
 			}
 		}
 		SpinLockRelease(&proc->movetoMutex);

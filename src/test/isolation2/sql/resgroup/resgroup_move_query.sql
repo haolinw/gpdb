@@ -166,11 +166,11 @@ SELECT is_session_in_group(pid, 'default_group') FROM pg_stat_activity WHERE wai
 3: SELECT num_running FROM gp_toolkit.gp_resgroup_status WHERE groupname='rg_move_query';
 1q:
 
--- test8: check destination group has no slot leaking if taget process recieved one move command at the time of processing another
+-- test8: check destination group has no slot leaking if target process received one move command at the time of processing another.
 -- sleep at first process
 -- start to move it at second process, send moving signal to first process
 -- suspend at first process just before setting latch and moving
--- run another moving command at third process, it should throw an error as target process is alredy moving
+-- run another moving command at third process, it should throw an error as target process is already moving
 -- resume at first process, it should continue with moving
 -- moving command at second process should finish successfully
 1: SET ROLE role_move_query_small;

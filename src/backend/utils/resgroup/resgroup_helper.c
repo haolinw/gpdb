@@ -26,6 +26,7 @@
 #include "utils/resgroup.h"
 #include "utils/cgroup.h"
 #include "utils/resource_manager.h"
+#include "pgstat.h"
 
 typedef struct ResGroupStat
 {
@@ -474,6 +475,7 @@ pg_resgroup_move_query(PG_FUNCTION_ARGS)
 		Oid currentGroupId;
 		pid_t pid = PG_GETARG_INT32(0);
 		groupName = text_to_cstring(PG_GETARG_TEXT_PP(1));
+		BackendState targetState;
 
 		if (pid == MyProcPid)
 			ereport(ERROR,
@@ -493,13 +495,11 @@ pg_resgroup_move_query(PG_FUNCTION_ARGS)
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 							(errmsg("cannot find process: %d", pid))));
 
-		currentGroupId = ResGroupGetGroupIdBySessionId(sessionId);
-		if (currentGroupId == InvalidOid)
+		targetState = pgstat_get_backend_current_state(pid);
+		if (targetState == STATE_IDLE)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 							(errmsg("process %d is in IDLE state", pid))));
-		if (currentGroupId == groupId)
-			PG_RETURN_BOOL(true);
 
 		ResGroupMoveQuery(sessionId, groupId, groupName);
 	}
@@ -508,7 +508,7 @@ pg_resgroup_move_query(PG_FUNCTION_ARGS)
 		sessionId = PG_GETARG_INT32(0);
 		groupName = text_to_cstring(PG_GETARG_TEXT_PP(1));
 		groupId = get_resgroup_oid(groupName, false);
-		if (!ResGroupMoveSignalTarget(sessionId, NULL, groupId, true))
+		if (!ResGroupMoveSignalTarget(sessionId, groupId, true))
 			elog(NOTICE, "cannot send signal to QE; ignoring...");
 	}
 

@@ -1481,6 +1481,7 @@ extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
+extern BackendState pgstat_get_backend_current_state(int pid);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern const char *pgstat_get_backend_desc(BackendType backendType);

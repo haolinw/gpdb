@@ -28,6 +28,7 @@
 #include "cdb/cdblocaldistribxact.h"  /* LocalDistribXactData */
 #include "cdb/cdbtm.h"  /* TMGXACT */
 #include "dsm.h"
+#include "utils/resgroup.h"
 
 /*
  * Each backend advertises up to PGPROC_MAX_CACHED_SUBXIDS TransactionIds
@@ -218,16 +219,9 @@ struct PGPROC
 	 */
 	int			queryCommandId;
 
-	/*
-	 * Information for resource group
-	 */
-	void		*resSlot;	/* the resource group slot granted.
-							 * NULL indicates the resource group is
-							 * locked for drop. */
-	slock_t		movetoMutex; /* spinlock to protect moveto* fields below */
-	void		*movetoResSlot; /* the resource group slot move to, valid only
-								 * on QD; when slot become NULL, it means
-								 * target process got the control over it */
+	/* Information for resource group */
+	bool		hasVirtualSlot;
+	slock_t		movetoMutex; 	/* spinlock to protect moveto* fields below */
 	Oid 		movetoGroupId;  /* the resource group id move to; valid on
 								 * both QE and QD; when id become InvalidOid
 								 * on QD, it means target process attempted to
@@ -236,6 +230,7 @@ struct PGPROC
 	pid_t		movetoCallerPid; /* pid of moving initiator; valid only on QD;
 								  * guards current moving command from another
 								  * commands */
+	MoveQueryTargetProcessStatus	movetoTargetStatus;
 
 	/* Support for group XID clearing. */
 	/* true, if member of ProcArray group waiting for XID clear */

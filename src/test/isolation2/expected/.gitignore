@@ -10,3 +10,4 @@
 # ignores including sub-directories
 autovacuum-analyze.out
 workfile_mgr_test.out
+resgroup/resgroup_io_limit.out
