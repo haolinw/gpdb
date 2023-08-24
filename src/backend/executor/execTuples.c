@@ -79,7 +79,7 @@ static inline void tts_buffer_heap_store_tuple(TupleTableSlot *slot,
 											   Buffer buffer,
 											   bool transfer_pin);
 static void tts_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple, bool shouldFree);
-
+static void tts_ao_store_tuple(TupleTableSlot *slot, MemTuple mtup, MemTupleBinding *mt_bind, bool shouldFree);
 
 const TupleTableSlotOps TTSOpsVirtual;
 const TupleTableSlotOps TTSOpsHeapTuple;
@@ -474,7 +474,17 @@ tts_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple, bool shouldFree)
 		slot->tts_flags |= TTS_FLAG_SHOULDFREE;
 }
 
-
+static void
+tts_ao_store_tuple(TupleTableSlot *slot, MemTuple mtup, MemTupleBinding *mt_bind, bool shouldFree)
+{
+    AOTupleTableSlot *aoslot = (AOTupleTableSlot *)slot;
+    aoslot->tuple = mtup;
+    aoslot->mt_bind = mt_bind;
+    slot->tts_nvalid = 0;
+    
+    if (shouldFree)
+        slot->tts_flags |= TTS_FLAG_SHOULDFREE;
+}
 /*
  * TupleTableSlotOps implementation for MinimalTupleTableSlot.
  */
@@ -868,6 +878,204 @@ tts_buffer_heap_copy_minimal_tuple(TupleTableSlot *slot)
 	return minimal_tuple_from_heap_tuple(bslot->base.tuple);
 }
 
+/*
+ * TupleTableSlotOps implementation for AOTupleTableSlot.
+ */
+static void
+tts_ao_init(TupleTableSlot *slot)
+{
+}
+
+static void
+tts_ao_release(TupleTableSlot *slot)
+{
+}
+
+static void
+tts_ao_clear(TupleTableSlot *slot)
+{
+    slot->tts_nvalid = 0;
+    slot->tts_flags |= TTS_FLAG_EMPTY;
+    ItemPointerSetInvalid(&slot->tts_tid);
+}
+
+/*
+ * VirtualTupleTableSlots always have fully populated tts_values and
+ * tts_isnull arrays.  So this function should never be called.
+ */
+static void
+tts_ao_getsomeattrs(TupleTableSlot *slot, int natts)
+{
+    AOTupleTableSlot *aoSlot = (AOTupleTableSlot *)slot;
+    memtuple_deform(aoSlot->tuple, aoSlot->mt_bind, slot->tts_values, slot->tts_isnull);
+    slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
+}
+
+/*
+ * VirtualTupleTableSlots never provide system attributes (except those
+ * handled generically, such as tableoid).  We generally shouldn't get
+ * here, but provide a user-friendly message if we do.
+ */
+static Datum
+tts_ao_getsysattr(TupleTableSlot *slot, int attnum, bool *isnull)
+{
+    return (Datum) NULL;
+}
+
+/*
+ * To materialize a virtual slot all the datums that aren't passed by value
+ * have to be copied into the slot's memory context.  To do so, compute the
+ * required size, and allocate enough memory to store all attributes.  That's
+ * good for cache hit ratio, but more importantly requires only memory
+ * allocation/deallocation.
+ */
+static void
+tts_ao_materialize(TupleTableSlot *slot)
+{
+    AOTupleTableSlot *aoslot = (AOTupleTableSlot *) slot;
+    TupleDesc	desc = slot->tts_tupleDescriptor;
+    Size		sz = 0;
+    char	   *data;
+
+    /* already materialized */
+    if (TTS_SHOULDFREE(slot))
+        return;
+
+    /* compute size of memory required */
+    for (int natt = 0; natt < desc->natts; natt++)
+    {
+        Form_pg_attribute att = TupleDescAttr(desc, natt);
+        Datum		val;
+
+        if (att->attbyval || slot->tts_isnull[natt])
+            continue;
+
+        val = slot->tts_values[natt];
+
+        if (att->attlen == -1 &&
+            VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+        {
+            /*
+             * We want to flatten the expanded value so that the materialized
+             * slot doesn't depend on it.
+             */
+            sz = att_align_nominal(sz, att->attalign);
+            sz += EOH_get_flat_size(DatumGetEOHP(val));
+        }
+        else
+        {
+            sz = att_align_nominal(sz, att->attalign);
+            sz = att_addlength_datum(sz, att->attlen, val);
+        }
+    }
+
+    /* all data is byval */
+    if (sz == 0)
+        return;
+
+    /* allocate memory */
+    aoslot->data = data = MemoryContextAlloc(slot->tts_mcxt, sz);
+    slot->tts_flags |= TTS_FLAG_SHOULDFREE;
+
+    /* and copy all attributes into the pre-allocated space */
+    for (int natt = 0; natt < desc->natts; natt++)
+    {
+        Form_pg_attribute att = TupleDescAttr(desc, natt);
+        Datum		val;
+
+        if (att->attbyval || slot->tts_isnull[natt])
+            continue;
+
+        val = slot->tts_values[natt];
+
+        if (att->attlen == -1 &&
+            VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+        {
+            Size		data_length;
+
+            /*
+             * We want to flatten the expanded value so that the materialized
+             * slot doesn't depend on it.
+             */
+            ExpandedObjectHeader *eoh = DatumGetEOHP(val);
+
+            data = (char *) att_align_nominal(data,
+                                              att->attalign);
+            data_length = EOH_get_flat_size(eoh);
+            EOH_flatten_into(eoh, data, data_length);
+
+            slot->tts_values[natt] = PointerGetDatum(data);
+            data += data_length;
+        }
+        else
+        {
+            Size		data_length = 0;
+
+            data = (char *) att_align_nominal(data, att->attalign);
+            data_length = att_addlength_datum(data_length, att->attlen, val);
+
+            memcpy(data, DatumGetPointer(val), data_length);
+
+            slot->tts_values[natt] = PointerGetDatum(data);
+            data += data_length;
+        }
+    }
+}
+
+static void
+tts_ao_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
+{
+    TupleDesc	srcdesc = srcslot->tts_tupleDescriptor;
+
+    Assert(srcdesc->natts <= dstslot->tts_tupleDescriptor->natts);
+
+    tts_ao_clear(dstslot);
+
+    slot_getallattrs(srcslot);
+
+    for (int natt = 0; natt < srcdesc->natts; natt++)
+    {
+        dstslot->tts_values[natt] = srcslot->tts_values[natt];
+        dstslot->tts_isnull[natt] = srcslot->tts_isnull[natt];
+    }
+
+    dstslot->tts_nvalid = srcdesc->natts;
+    dstslot->tts_flags &= ~TTS_FLAG_EMPTY;
+
+    /* make sure storage doesn't depend on external memory */
+    tts_ao_materialize(dstslot);
+}
+
+static HeapTuple
+tts_ao_copy_heap_tuple(TupleTableSlot *slot)
+{
+    AOTupleTableSlot *aoslot = (AOTupleTableSlot *) slot;
+    Assert(!TTS_EMPTY(slot));
+    if (slot->tts_nvalid < slot->tts_tupleDescriptor->natts)
+    {
+        memtuple_deform(aoslot->tuple, aoslot->mt_bind, slot->tts_values, slot->tts_isnull);
+        slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
+    }
+
+    return heap_form_tuple(slot->tts_tupleDescriptor,
+                           slot->tts_values,
+                           slot->tts_isnull);
+}
+
+static MinimalTuple
+tts_ao_copy_minimal_tuple(TupleTableSlot *slot)
+{
+    AOTupleTableSlot *aoslot = (AOTupleTableSlot *) slot;
+    Assert(!TTS_EMPTY(slot));
+
+    memtuple_deform(aoslot->tuple, aoslot->mt_bind, slot->tts_values, slot->tts_isnull);
+    slot->tts_nvalid = slot->tts_tupleDescriptor->natts;
+
+    return heap_form_minimal_tuple(slot->tts_tupleDescriptor,
+                                   slot->tts_values,
+                                   slot->tts_isnull);
+}
+
 static inline void
 tts_buffer_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple,
 							Buffer buffer, bool transfer_pin)
@@ -1106,6 +1314,25 @@ const TupleTableSlotOps TTSOpsBufferHeapTuple = {
 	.copy_minimal_tuple = tts_buffer_heap_copy_minimal_tuple
 };
 
+const TupleTableSlotOps TTSOpsAOTuple = {
+    .base_slot_size = sizeof(AOTupleTableSlot),
+    .init = tts_ao_init,
+    .release = tts_ao_release,
+    .clear = tts_ao_clear,
+    .getsomeattrs = tts_ao_getsomeattrs,
+    .getsysattr = tts_ao_getsysattr,
+    .materialize = tts_ao_materialize,
+    .copyslot = tts_ao_copyslot,
+
+    /*
+     * A ao tuple table slot can not "own" a heap tuple or a minimal
+     * tuple.
+     */
+    .get_heap_tuple = NULL,
+    .get_minimal_tuple = NULL,
+    .copy_heap_tuple = tts_ao_copy_heap_tuple,
+    .copy_minimal_tuple = tts_ao_copy_minimal_tuple
+};
 
 /* ----------------------------------------------------------------
  *				  tuple table create/delete functions
@@ -1472,6 +1699,33 @@ ExecStoreMinimalTuple(MinimalTuple mtup,
 	tts_minimal_store_tuple(slot, mtup, shouldFree);
 
 	return slot;
+}
+
+/* --------------------------------
+ *		ExecStoreVirtualTuple
+ *			Mark a slot as containing a virtual tuple.
+ *
+ * The protocol for loading a slot with virtual tuple data is:
+ *		* Call ExecClearTuple to mark the slot empty.
+ *		* Store data into the Datum/isnull arrays.
+ *		* Call ExecStoreVirtualTuple to mark the slot valid.
+ * This is a bit unclean but it avoids one round of data copying.
+ * --------------------------------
+ */
+TupleTableSlot *
+ExecStoreAOTuple(TupleTableSlot *slot, MemTuple mtup, MemTupleBinding *mt_bind, bool *shouldFree)
+{
+    /*
+     * sanity checks
+     */
+    Assert(slot != NULL);
+    Assert(slot->tts_tupleDescriptor != NULL);
+    Assert(TTS_EMPTY(slot));
+
+    slot->tts_flags &= ~TTS_FLAG_EMPTY;
+
+    tts_ao_store_tuple(slot, mtup, mt_bind, shouldFree);
+    return slot;
 }
 
 /*
