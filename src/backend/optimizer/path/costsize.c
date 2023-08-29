@@ -719,7 +719,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	AssertImply(IsAccessMethodAO(baserel_orig->relam), baserel->allvisfrac == 1);
 
 	/* GPDB: Special costing is required for Index Only Scans on AO/CO tables */
-	if (IsAccessMethodAO(baserel_orig->relam) && indexonly)
+	if (IsAccessMethodAO(baserel_orig->relam))
 	{
 		double 		num_blkdir_pages;
 
@@ -924,7 +924,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	startup_cost += path->path.pathtarget->cost.startup;
 	cpu_run_cost += path->path.pathtarget->cost.per_tuple * path->path.rows;
 
-	if (IsAccessMethodAO(baserel_orig->relam) && indexonly)
+	if (IsAccessMethodAO(baserel_orig->relam))
 	{
 		/*
 		 * GPDB: Additional charges for Index Only Scans on AO/CO tables
