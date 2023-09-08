@@ -63,6 +63,7 @@ extern LLVMTypeRef TypeParamBool;
 extern LLVMTypeRef TypePGFunction;
 extern LLVMTypeRef TypeSizeT;
 extern LLVMTypeRef TypeStorageBool;
+extern LLVMTypeRef TypeMemTupleBindFlag;
 
 extern LLVMTypeRef StructNullableDatum;
 extern LLVMTypeRef StructTupleDescData;
@@ -70,6 +71,11 @@ extern LLVMTypeRef StructHeapTupleData;
 extern LLVMTypeRef StructTupleTableSlot;
 extern LLVMTypeRef StructHeapTupleTableSlot;
 extern LLVMTypeRef StructMinimalTupleTableSlot;
+extern LLVMTypeRef StructAOTupleTableSlot;
+extern LLVMTypeRef StructMemTupleData;
+extern LLVMTypeRef StructMemTupleBinding;
+extern LLVMTypeRef StructMemTupleBindingCols;
+extern LLVMTypeRef StructMemTupleAttrBinding;
 extern LLVMTypeRef StructMemoryContextData;
 extern LLVMTypeRef StructFunctionCallInfoData;
 extern LLVMTypeRef StructExprContext;
@@ -120,6 +126,9 @@ extern bool llvm_compile_expr(struct ExprState *state);
 struct TupleTableSlotOps;
 extern LLVMValueRef slot_compile_deform(struct LLVMJitContext *context, TupleDesc desc,
 										const struct TupleTableSlotOps *ops, int natts);
+
+extern LLVMValueRef slot_compile_deform_ao(struct LLVMJitContext *context, TupleDesc desc,
+                                           const struct TupleTableSlotOps *ops, int natts);
 
 /*
  ****************************************************************************

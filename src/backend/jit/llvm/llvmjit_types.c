@@ -48,6 +48,7 @@
 PGFunction	TypePGFunction;
 size_t		TypeSizeT;
 bool		TypeStorageBool;
+MemTupleBindFlag TypeMemTupleBindFlag;
 
 NullableDatum StructNullableDatum;
 AggState	StructAggState;
@@ -62,6 +63,11 @@ MemoryContextData StructMemoryContextData;
 TupleTableSlot StructTupleTableSlot;
 HeapTupleTableSlot StructHeapTupleTableSlot;
 MinimalTupleTableSlot StructMinimalTupleTableSlot;
+AOTupleTableSlot StructAOTupleTableSlot;
+MemTupleData StructMemTupleData;
+MemTupleBinding StructMemTupleBinding;
+MemTupleBindingCols StructMemTupleBindingCols;
+MemTupleAttrBinding StructMemTupleAttrBinding;
 TupleDescData StructTupleDescData;
 
 

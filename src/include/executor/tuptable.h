@@ -289,7 +289,9 @@ typedef struct MinimalTupleTableSlot
 typedef struct AOTupleTableSlot
 {
     TupleTableSlot base;
+#define FIELDNO_AOTUPLETABLESLOT_TUPLE 1
     MemTuple tuple;
+#define FIELDNO_AOTUPLETABLESLOT_BINDING 2
     MemTupleBinding *mt_bind;
     char *data;
 } AOTupleTableSlot;
