@@ -2162,7 +2162,7 @@ aocs_index_only_init(Relation relation, Snapshot snapshot)
 bool
 aocs_index_only_check(AOCSIndexOnlyDesc indexonlydesc, AOTupleId *aotid, Snapshot snapshot)
 {
-	if (!AppendOnlyBlockDirectory_CoversTuple(indexonlydesc->blockDirectory, aotid))
+	if (!AppendOnlyBlockDirectory_CoversTuple(indexonlydesc->blockDirectory, aotid, false))
 		return false;
 
 	/* check SnapshotAny for the case when gp_select_invisible is on */

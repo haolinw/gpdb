@@ -62,7 +62,8 @@ insert_new_entry(AppendOnlyBlockDirectory *blockDirectory,
 static void clear_minipage(MinipagePerColumnGroup *minipagePerColumnGroup);
 static bool blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 								AOTupleId *aoTupleId,
-								int columnGroupNo);
+								int columnGroupNo,
+								bool force_sysscan);
 
 static int findFileSegInfo(AppendOnlyBlockDirectory *blockDirectory,
 						   int segmentFileNum);
@@ -1023,12 +1024,17 @@ AppendOnlyBlockDirectory_GetEntryForPartialScan(AppendOnlyBlockDirectory *blockD
  * in which this tid resides.
  *
  * Currently used by index fetches to perform unique constraint validation and
- * for index only scans. A sysscan of the block directory relation is performed
- * to determine the result. (see blkdir_entry_exists())
+ * for index only scans.
  *
- * Performing a sysscan also has the distinct advantage of setting the xmin/xmax
- * of the snapshot used to scan, which is a requirement when SNAPSHOT_DIRTY is
- * used (in unique checks). See _bt_check_unique() and SNAPSHOT_DIRTY for details.
+ * The check can be satisfied either by looking at the currently cached minipage
+ * or by performing a sysscan of the block directory relation
+ * (see blkdir_entry_exists()).
+ *
+ * For a unique index check, we cannot consult the cache and a fresh per-tuple
+ * sysscan must be performed ('force_sysscan' must be true). The sysscan
+ * populates the xmin/xmax of the snapshot used to scan, which is a requirement
+ * when SNAPSHOT_DIRTY is used (in unique checks). See _bt_check_unique() and
+ * SNAPSHOT_DIRTY for details.
  *
  * Note about AOCO tables:
  * For AOCO tables, there are multiple block directory entries for each tid.
@@ -1045,7 +1051,8 @@ AppendOnlyBlockDirectory_GetEntryForPartialScan(AppendOnlyBlockDirectory *blockD
 bool
 AppendOnlyBlockDirectory_CoversTuple(
 									 AppendOnlyBlockDirectory *blockDirectory,
-									 AOTupleId *aoTupleId)
+									 AOTupleId *aoTupleId,
+									 bool force_sysscan)
 {
 	Relation	aoRel = blockDirectory->aoRel;
 	int 		firstNonDroppedColumn = -1;
@@ -1053,7 +1060,7 @@ AppendOnlyBlockDirectory_CoversTuple(
 	Assert(RelationIsValid(aoRel));
 
 	if (RelationIsAoRows(aoRel))
-		return blkdir_entry_exists(blockDirectory, aoTupleId, 0);
+		return blkdir_entry_exists(blockDirectory, aoTupleId, 0, force_sysscan);
 	else
 	{
 		for(int i = 0; i < aoRel->rd_att->natts; i++)
@@ -1067,18 +1074,23 @@ AppendOnlyBlockDirectory_CoversTuple(
 
 		return blkdir_entry_exists(blockDirectory,
 								   aoTupleId,
-								   firstNonDroppedColumn);
+								   firstNonDroppedColumn,
+								   force_sysscan);
 	}
 }
 
 /*
  * Does a visible block directory entry exist for a given aotid and column no?
  * Currently used to satisfy unique constraint checks and index only scans.
+ *
+ * 'force_sysscan' dictates whether cached minipages in the 'blockDirectory'
+ * structure can be consulted.
  */
 static bool
 blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 					AOTupleId *aoTupleId,
-					int columnGroupNo)
+					int columnGroupNo,
+					bool force_sysscan)
 {
 	int			segmentFileNum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	int64		rowNum = AOTupleIdGet_rowNum(aoTupleId);
@@ -1097,6 +1109,31 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 					  "(columnGroupNo, segmentFileNum, rowNum) = "
 					  "(%d, %d, " INT64_FORMAT ")",
 				  0, segmentFileNum, rowNum)));
+
+	/*
+	 * Check the cached minipage first to see if the row number exists. If not,
+	 * proceed to perform a sysscan of the block directory.
+	 */
+	if (!force_sysscan && blockDirectory->currentSegmentFileNum == segmentFileNum)
+	{
+		MinipagePerColumnGroup *minipageInfo = &blockDirectory->minipages[columnGroupNo];
+
+		if (minipageInfo && minipageInfo->minipage)
+		{
+			int entry_no = find_minipage_entry(minipageInfo->minipage,
+											   minipageInfo->numMinipageEntries,
+											   rowNum);
+			if (entry_no != InvalidEntryNum)
+			{
+				ereportif(Debug_appendonly_print_blockdirectory, LOG,
+						  (errmsg("Append-only block directory covers tuple check cache hit: "
+								  "(columnGroupNo, segmentFileNum, rowNum) = "
+								  "(%d, %d, " INT64_FORMAT ")",
+							  0, segmentFileNum, rowNum)));
+				return true;
+			}
+		}
+	}
 
 	blkdirTupleDesc = RelationGetDescr(blkdirRel);
 
@@ -1160,7 +1197,6 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 			   (unsigned long) HeapTupleHeaderGetRawXmax(tuple->t_data),
 			   blockDirectory->appendOnlyMetaDataSnapshot->snapshot_type);
 
-		/* Set this so that we don't blow up in the assert in extract_minipage */
 		blockDirectory->currentSegmentFileNum = segmentFileNum;
 		extract_minipage(blockDirectory,
 						 tuple,

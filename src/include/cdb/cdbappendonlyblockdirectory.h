@@ -225,7 +225,8 @@ extern int64 AOBlkDirScan_GetRowNum(
 	int64							*startrow);
 extern bool AppendOnlyBlockDirectory_CoversTuple(
 	AppendOnlyBlockDirectory		*blockDirectory,
-	AOTupleId 						*aoTupleId);
+	AOTupleId 						*aoTupleId,
+	bool							force_sysscan);
 extern void AppendOnlyBlockDirectory_Init_forInsert(
 	AppendOnlyBlockDirectory *blockDirectory,
 	Snapshot appendOnlyMetaDataSnapshot,
@@ -320,7 +321,8 @@ static inline bool AppendOnlyBlockDirectory_UniqueCheck(
 	blockDirectory->appendOnlyMetaDataSnapshot = appendOnlyMetaDataSnapshot;
 
 	covers = AppendOnlyBlockDirectory_CoversTuple(blockDirectory,
-												  aoTupleId);
+												  aoTupleId,
+												  true);
 
 	/*
 	 * Reset the metadata snapshot to avoid leaking a stack reference. We have
