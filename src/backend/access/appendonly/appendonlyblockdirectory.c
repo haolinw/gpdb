@@ -1110,29 +1110,16 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 					  "(%d, %d, " INT64_FORMAT ")",
 				  0, segmentFileNum, rowNum)));
 
-	/*
-	 * Check the cached minipage first to see if the row number exists. If not,
-	 * proceed to perform a sysscan of the block directory.
-	 */
-	if (!force_sysscan && blockDirectory->currentSegmentFileNum == segmentFileNum)
+	if (!force_sysscan && blockDirectory->cached_mpentry_num != InvalidEntryNum)
 	{
-		MinipagePerColumnGroup *minipageInfo = &blockDirectory->minipages[columnGroupNo];
+		AppendOnlyBlockDirectoryEntry directoryEntry = {{0}};
 
-		if (minipageInfo && minipageInfo->minipage)
-		{
-			int entry_no = find_minipage_entry(minipageInfo->minipage,
-											   minipageInfo->numMinipageEntries,
-											   rowNum);
-			if (entry_no != InvalidEntryNum)
-			{
-				ereportif(Debug_appendonly_print_blockdirectory, LOG,
-						  (errmsg("Append-only block directory covers tuple check cache hit: "
-								  "(columnGroupNo, segmentFileNum, rowNum) = "
-								  "(%d, %d, " INT64_FORMAT ")",
-							  0, segmentFileNum, rowNum)));
-				return true;
-			}
-		}
+		if (AppendOnlyBlockDirectory_GetCachedEntry(blockDirectory,
+													segmentFileNum,
+													columnGroupNo,
+													&directoryEntry) &&
+				AppendOnlyBlockDirectoryEntry_RangeHasRow(directoryEntry, rowNum))
+			return true;
 	}
 
 	blkdirTupleDesc = RelationGetDescr(blkdirRel);
@@ -1204,9 +1191,9 @@ blkdir_entry_exists(AppendOnlyBlockDirectory *blockDirectory,
 						 columnGroupNo);
 
 		minipageInfo = &blockDirectory->minipages[columnGroupNo];
-		entry_no = find_minipage_entry(minipageInfo->minipage,
-									   minipageInfo->numMinipageEntries,
-									   rowNum);
+		entry_no = blockDirectory->cached_mpentry_num = find_minipage_entry(minipageInfo->minipage,
+																			minipageInfo->numMinipageEntries,
+																			rowNum);
 		if (entry_no != InvalidEntryNum)
 		{
 			found = true;
