@@ -109,6 +109,16 @@ HINT:  The 'DISTRIBUTED BY' clause determines the distribution of data. Make sur
 INSERT INTO test_various_col_types_@amname@ SELECT i, 'texttype'||i, i FROM generate_series(1,9999) i;
 CREATE INDEX i_test_various_col_types_@amname@ ON test_various_col_types_@amname@(inttype) INCLUDE (texttype);
 VACUUM ANALYZE test_various_col_types_@amname@;
+SELECT attname, correlation FROM pg_stats WHERE tablename='test_various_col_types_@amname@';
+INFO:  GPORCA failed to produce a plan, falling back to Postgres-based planner
+DETAIL:  Falling back to Postgres-based planner because GPORCA does not support the following feature: views with security_barrier ON
+   attname   | correlation 
+-------------+-------------
+ inttype     |           1
+ texttype    |  0.81904334
+ decimaltype |           1
+(3 rows)
+
 -- KEYS: [inttype] INCLUDED: [texttype]
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF) SELECT texttype FROM test_various_col_types_@amname@ WHERE inttype<42;
                                                       QUERY PLAN                                                       
