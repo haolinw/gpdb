@@ -604,10 +604,13 @@ AppendOnlyBlockDirectory_GetCachedEntry(
 	Assert(segmentFileNum == blockDirectory->currentSegmentFileNum);
 	Assert(minipageInfo->numMinipageEntries > 0);
 
-	return set_directoryentry_range(blockDirectory,
-									columnGroupNo,
-									blockDirectory->cached_mpentry_num,
-									directoryEntry);
+	if (blockDirectory->currentSegmentFileInfo != NULL)
+		return set_directoryentry_range(blockDirectory,
+										columnGroupNo,
+										blockDirectory->cached_mpentry_num,
+										directoryEntry);
+	
+	// TODO: set firstRowNum and lastRowNum to the entry
 }
 
 /*
@@ -672,14 +675,10 @@ AppendOnlyBlockDirectory_GetEntry(
 	 * for constructing the whole tuple.
 	 */
 	if (!blockDirectory->isAOCol && blockDirectory->cached_mpentry_num != InvalidEntryNum)
-	{
-		Assert(blockDirectory->currentSegmentFileInfo != NULL);
-
 		return AppendOnlyBlockDirectory_GetCachedEntry(blockDirectory,
 													   segmentFileNum,
 													   columnGroupNo,
 													   directoryEntry);
-	}
 
 	/*
 	 * If the segment file number is the same as
