@@ -139,9 +139,6 @@ typedef struct AppendOnlyBlockDirectory
 
 	/*
 	 * Minipage entry number, for caching purpose.
-	 *
-	 * XXX: scenarios which call AppendOnlyBlockDirectory_GetEntry()
-	 * may need to consider using this cache.
 	 */
 	int cached_mpentry_num;
 
@@ -193,6 +190,7 @@ typedef struct AOBlkDirScanData
 	SysScanDesc					sysscan;
 	int							segno;
 	int							colgroupno;
+	int							mpentryno;
 } AOBlkDirScanData, *AOBlkDirScan;
 
 extern void AppendOnlyBlockDirectoryEntry_GetBeginRange(
@@ -374,6 +372,7 @@ AOBlkDirScan_Init(AOBlkDirScan blkdirscan,
 	blkdirscan->sysscan = NULL;
 	blkdirscan->segno = -1;
 	blkdirscan->colgroupno = 0;
+	blkdirscan->mpentryno = InvalidEntryNum;
 }
 
 /* should be called before fetch_finish() */
