@@ -869,9 +869,9 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 										&rowsprocessed);
 
 		elog(DEBUG2, "AOBlkDirScan_GetRowNum(segno: %d, col: %d, targrow: %ld): "
-			 "[segfirstrow: %ld, segrowsprocessed: %ld, rownum: %ld, cached_mpentry_num: %d]",
+			 "[segfirstrow: %ld, segrowsprocessed: %ld, rownum: %ld, cached_entry_no: %d]",
 			 segno, col, targrow, scan->segfirstrow, scan->segrowsprocessed, rownum,
-			 blkdir->cached_mpentry_num);
+			 blkdir->minipages[col].cached_entry_no);
 
 		if (rownum < 0)
 			continue;
@@ -898,9 +898,9 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 	ExecClearTuple(slot);
 
 	/* 
-	 * Unlike ao_row, we don't update blkdir->cached_mpentry_num before
-	 * fetching because ao_column requires all other column entries to
-	 * form the whole tuple instead of the single one obtained by
+	 * Unlike ao_row, we don't update blkdir->minipages[col].cached_entry_no
+	 * before fetching because ao_column requires all other column entries
+	 * to form the whole tuple instead of the single one obtained by
 	 * AOBlkDirScan_GetRowNum().
 	 */
 

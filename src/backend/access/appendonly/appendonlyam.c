@@ -1374,9 +1374,9 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 									&rowsprocessed);
 
 	elog(DEBUG2, "AOBlkDirScan_GetRowNum(segno: %d, col: %d, targrow: %ld): "
-		 "[segfirstrow: %ld, segrowsprocessed: %ld, rownum: %ld, cached_mpentry_num: %d]",
+		 "[segfirstrow: %ld, segrowsprocessed: %ld, rownum: %ld, cached_entry_no: %d]",
 		 segno, 0, targrow, scan->segfirstrow, scan->segrowsprocessed, rownum,
-		 blkdir->cached_mpentry_num);
+		 blkdir->minipages[0].cached_entry_no);
 	
 	if (rownum < 0)
 		return false;
@@ -1391,12 +1391,12 @@ appendonly_blkdirscan_get_target_tuple(AppendOnlyScanDesc scan, int64 targrow, T
 	Assert(blkdir->minipages == &blkdir->minipages[0]);
 
 	/*
-	 * Update cached_mpentry_num to the entry obtained from
+	 * Update cached_entry_no to the entry obtained from
 	 * AOBlkDirScan_GetRowNum(), then we can reuse it directly
 	 * during fetch below.
-	 * See cached_mpentry_num in find_minipage_entry().
+	 * See cached_entry_no in find_minipage_entry().
 	 */
-	blkdir->cached_mpentry_num = scan->blkdirscan->mpentryno;
+	blkdir->minipages[0].cached_entry_no = scan->blkdirscan->mpentryno;
 
 	/* fetch the target tuple */
 	if(!appendonly_fetch(scan->aofetch, &aotid, slot))

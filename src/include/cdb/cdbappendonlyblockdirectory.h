@@ -83,6 +83,8 @@ typedef struct MinipagePerColumnGroup
 	Minipage *minipage;
 	uint32 numMinipageEntries;
 	ItemPointerData tupleTid;
+	/* cached entry number from last call to find_minipage_entry() */
+	int cached_entry_no;
 } MinipagePerColumnGroup;
 
 /*
@@ -136,11 +138,6 @@ typedef struct AppendOnlyBlockDirectory
 	int numScanKeys;
 	ScanKey scanKeys;
 	StrategyNumber *strategyNumbers;
-
-	/*
-	 * Minipage entry number, for caching purpose.
-	 */
-	int cached_mpentry_num;
 
 }	AppendOnlyBlockDirectory;
 
@@ -362,6 +359,7 @@ copy_out_minipage(MinipagePerColumnGroup *minipageInfo,
 	Assert(minipageInfo->minipage->nEntry <= NUM_MINIPAGE_ENTRIES);
 
 	minipageInfo->numMinipageEntries = minipageInfo->minipage->nEntry;
+	minipageInfo->cached_entry_no = InvalidEntryNum;
 }
 
 static inline void
