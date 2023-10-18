@@ -42,6 +42,20 @@
 #define APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT \
 	(APPENDONLY_VISIMAP_MAX_BITMAP_SIZE / sizeof(bitmapword))
 
+/* (2^40 - 1) / 2^15 + 1 = 2^25 */
+#define APPENDONLY_VISIMAP_MAX_RANGE_COUNT \
+	(AOTupleId_MaxRowNum / APPENDONLY_VISIMAP_MAX_RANGE + 1)
+
+/* (2^25 / 64) / 512 = 1024 */
+#define APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT \
+	((APPENDONLY_VISIMAP_MAX_RANGE_COUNT / BITS_PER_BITMAPWORD) / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT)
+
+typedef struct AppendOnlyVisimapAllVisibleSet
+{
+	Bitmapset *bitmapsets[AOTupleId_MultiplierSegmentFileNum][APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT];
+	MemoryContext mctx;
+} AppendOnlyVisimapAllVisibleSet;
+
 /*
  * Data structure for the ao visibility map processing.
  *
@@ -63,7 +77,8 @@ typedef struct AppendOnlyVisimap
 	 * Support operations to search, load, and store visibility map entries.
 	 */
 	AppendOnlyVisimapStore visimapStore;
-	Bitmapset *allvisible_bitmap[AOTupleId_MultiplierSegmentFileNum];
+
+	AppendOnlyVisimapAllVisibleSet allvisibleset;
 
 } AppendOnlyVisimap;
 
