@@ -225,10 +225,14 @@ AppendOnlyVisimapAllVisibleSet_CoversTuple(
 	Bitmapset *bms;
 	int segnum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	uint64 rownum = AOTupleIdGet_rowNum(aoTupleId);
-	int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
-	int nwords = nranges / BITS_PER_BITMAPWORD + 1;
-	int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
-	int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	// int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
+	int nranges = (int)((rownum >> 15) + 1);
+	// int nwords = nranges / BITS_PER_BITMAPWORD + 1;
+	int nwords = (nranges >> 6) + 1;
+	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
+	int nbms = (nwords >> 9) + 1;
+	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	int rangenum = nranges - ((nbms - 1) << 15) - 1;
 
 	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
 	Assert(nbms <= APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT);
@@ -248,10 +252,14 @@ AppendOnlyVisimapAllVisibleSet_AddTuple(
 	Bitmapset *bms;
 	int segnum = AOTupleIdGet_segmentFileNum(aoTupleId);
 	uint64 rownum = AOTupleIdGet_rowNum(aoTupleId);
-	int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
-	int nwords = nranges / BITS_PER_BITMAPWORD + 1;
-	int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
-	int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	// int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
+	int nranges = (int)((rownum >> 15) + 1);
+	// int nwords = nranges / BITS_PER_BITMAPWORD + 1;
+	int nwords = (nranges >> 6) + 1;
+	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
+	int nbms = (nwords >> 9) + 1;
+	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	int rangenum = nranges - ((nbms - 1) << 15) - 1;
 	
 	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
 	Assert(nbms <= APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT);
