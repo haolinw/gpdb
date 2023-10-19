@@ -102,7 +102,8 @@ AppendOnlyVisimap_Finish(
 
 	AppendOnlyVisimapStore_Finish(&visiMap->visimapStore, lockmode);
 	AppendOnlyVisimapEntry_Finish(&visiMap->visimapEntry);
-	AppendOnlyVisimapAllVisibleSet_Finish(&visiMap->allvisibleset);
+	if (gp_aovisimap_opt)
+		AppendOnlyVisimapAllVisibleSet_Finish(&visiMap->allvisibleset);
 
 	MemoryContextDelete(visiMap->memoryContext);
 	visiMap->memoryContext = NULL;
@@ -145,8 +146,9 @@ AppendOnlyVisimap_Init(
 								appendOnlyMetaDataSnapshot,
 								visiMap->memoryContext);
 
-	AppendOnlyVisimapAllVisibleSet_Init(&visiMap->allvisibleset,
-										visiMap->memoryContext);
+	if (gp_aovisimap_opt)
+		AppendOnlyVisimapAllVisibleSet_Init(&visiMap->allvisibleset,
+											visiMap->memoryContext);
 
 	MemoryContextSwitchTo(oldContext);
 }
@@ -231,7 +233,7 @@ AppendOnlyVisimapAllVisibleSet_CoversTuple(
 	int nwords = (nranges >> 6) + 1;
 	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
 	int nbms = (nwords >> 9) + 1;
-	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_RANGE - 1;
 	int rangenum = nranges - ((nbms - 1) << 15) - 1;
 
 	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
@@ -258,7 +260,7 @@ AppendOnlyVisimapAllVisibleSet_AddTuple(
 	int nwords = (nranges >> 6) + 1;
 	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
 	int nbms = (nwords >> 9) + 1;
-	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT * BITS_PER_BITMAPWORD - 1;
+	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_RANGE - 1;
 	int rangenum = nranges - ((nbms - 1) << 15) - 1;
 	
 	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
@@ -293,8 +295,8 @@ AppendOnlyVisimap_IsVisible(
 		   "(tupleId) = %s",
 		   AOTupleIdToString(aoTupleId));
 
-	if (AppendOnlyVisimapAllVisibleSet_CoversTuple(&visiMap->allvisibleset,
-												   aoTupleId))
+	if (gp_aovisimap_opt && AppendOnlyVisimapAllVisibleSet_CoversTuple(&visiMap->allvisibleset,
+																	   aoTupleId))
 		return true;
 
 	if (!AppendOnlyVisimapEntry_CoversTuple(&visiMap->visimapEntry,

@@ -44,6 +44,7 @@
 		"gp_debug_linger",
 		"gp_default_storage_options",
 		"gp_detect_data_correctness",
+		"gp_aovisimap_opt",
 		"gp_disable_tuple_hints",
 		"gp_enable_interconnect_aggressive_retry",
 		"gp_enable_segment_copy_checking",

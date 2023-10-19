@@ -3005,6 +3005,16 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"gp_aovisimap_opt", PGC_USERSET, UNGROUPED,
+		gettext_noop("Temparay GUC for enable/disable aovisimap caching optimization."),
+		NULL,
+		GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_aovisimap_opt,
+		true,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{

@@ -103,6 +103,8 @@ int         gp_segment_connect_timeout = 180;  /* Maximum time (in seconds) allo
 
 bool		gp_detect_data_correctness;		/* Detect if the current data distribution is correct */
 
+bool		gp_aovisimap_opt;
+
 /*
  * Configurable timeout for snapshot add: exceptionally busy systems may take
  * longer than our old hard-coded version -- so here is a tuneable version.
