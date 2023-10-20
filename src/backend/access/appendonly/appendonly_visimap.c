@@ -24,6 +24,26 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
+/* nranges = (rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1) */
+#define AOVISIMAP_ALLVISIBLESET_RANGE_COUNT(rownum) ((int)(((rownum) >> 15) + 1))
+/* nwords = nranges / BITS_PER_BITMAPWORD + 1 */
+#define AOVISIMAP_ALLVISIBLESET_WORD_COUNT(nranges) (((nranges) >> 6) + 1)
+/* nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1 */
+#define AOVISIMAP_ALLVISIBLESET_BMS_COUNT(nwords) (((nwords) >> 9) + 1)
+/* rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_RANGE - 1 */
+#define CALCULATE_BMS_AND_RANGENUM(aotid, allvisibleset, bmsptr, rangenum) \
+do { \
+    int segnum = AOTupleIdGet_segmentFileNum(aotid); \
+    uint64 rownum = AOTupleIdGet_rowNum(aotid); \
+    int nranges = AOVISIMAP_ALLVISIBLESET_RANGE_COUNT(rownum); \
+    int nbms = AOVISIMAP_ALLVISIBLESET_BMS_COUNT(AOVISIMAP_ALLVISIBLESET_WORD_COUNT(nranges)); \
+    rangenum = nranges - ((nbms - 1) << 15) - 1; \
+	Assert(nranges <= AOVISIMAP_ALLVISIBLESET_MAX_RANGE_COUNT); \
+	Assert(nbms <= AOVISIMAP_ALLVISIBLESET_MAX_BMS_COUNT); \
+	Assert((allvisibleset) != NULL); \
+    bmsptr = &((allvisibleset)->bitmapsets[segnum][nbms - 1]); \
+} while (0)
+
 /*
  * Key structure for the visimap deletion hash table.
  */
@@ -207,7 +227,7 @@ AppendOnlyVisimapAllVisibleSet_Finish(
 
 	for (int i = 0; i < AOTupleId_MultiplierSegmentFileNum; i++)
 	{
-		for (int j = 0; j < APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT; j++)
+		for (int j = 0; j < AOVISIMAP_ALLVISIBLESET_MAX_BMS_COUNT; j++)
 		{
 			bms_free(allvisibleset->bitmapsets[i][j]);
 			allvisibleset->bitmapsets[i][j] = NULL;
@@ -224,26 +244,12 @@ AppendOnlyVisimapAllVisibleSet_CoversTuple(
 										   AppendOnlyVisimapAllVisibleSet *allvisibleset,
 										   AOTupleId *aoTupleId)
 {
-	Bitmapset *bms;
-	int segnum = AOTupleIdGet_segmentFileNum(aoTupleId);
-	uint64 rownum = AOTupleIdGet_rowNum(aoTupleId);
-	// int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
-	int nranges = (int)((rownum >> 15) + 1);
-	// int nwords = nranges / BITS_PER_BITMAPWORD + 1;
-	int nwords = (nranges >> 6) + 1;
-	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
-	int nbms = (nwords >> 9) + 1;
-	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_RANGE - 1;
-	int rangenum = nranges - ((nbms - 1) << 15) - 1;
+	Bitmapset **bmsptr;
+	int rangenum;
 
-	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
-	Assert(nbms <= APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT);
+	CALCULATE_BMS_AND_RANGENUM(aoTupleId, allvisibleset, bmsptr, rangenum);
 
-	Assert(allvisibleset != NULL);
-
-	bms = allvisibleset->bitmapsets[segnum][nbms - 1];
-
-	return bms_is_member(rangenum, bms);
+	return bms_is_member(rangenum, *bmsptr);
 }
 
 static inline void
@@ -251,26 +257,14 @@ AppendOnlyVisimapAllVisibleSet_AddTuple(
 										AppendOnlyVisimapAllVisibleSet *allvisibleset,
 										AOTupleId *aoTupleId)
 {
-	Bitmapset *bms;
-	int segnum = AOTupleIdGet_segmentFileNum(aoTupleId);
-	uint64 rownum = AOTupleIdGet_rowNum(aoTupleId);
-	// int nranges = (int)(rownum / APPENDONLY_VISIMAP_MAX_RANGE + 1);
-	int nranges = (int)((rownum >> 15) + 1);
-	// int nwords = nranges / BITS_PER_BITMAPWORD + 1;
-	int nwords = (nranges >> 6) + 1;
-	// int nbms = nwords / APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT + 1;
-	int nbms = (nwords >> 9) + 1;
-	// int rangenum = nranges - (nbms - 1) * APPENDONLY_VISIMAP_MAX_RANGE - 1;
-	int rangenum = nranges - ((nbms - 1) << 15) - 1;
-	
-	Assert(nranges <= APPENDONLY_VISIMAP_MAX_RANGE_COUNT);
-	Assert(nbms <= APPENDONLY_VISIMAP_MAX_ALLVISIBLESET_COUNT);
+	Bitmapset **bmsptr;
+	int rangenum;
 
-	Assert(allvisibleset != NULL);
+	CALCULATE_BMS_AND_RANGENUM(aoTupleId, allvisibleset, bmsptr, rangenum);
+
 	Assert(CurrentMemoryContext == allvisibleset->mctx);
-	
-	bms = allvisibleset->bitmapsets[segnum][nbms - 1];
-	allvisibleset->bitmapsets[segnum][nbms - 1] = bms_add_member(bms, rangenum);
+
+	*bmsptr = bms_add_member(*bmsptr, rangenum);
 }
 
 /*
