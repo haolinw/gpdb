@@ -256,6 +256,7 @@ bool		gp_enable_multiphase_agg = true;
 bool		gp_enable_preunique = true;
 bool		gp_enable_agg_distinct = true;
 bool		gp_enable_dqa_pruning = true;
+bool		gp_enable_ao_fixed_size_indexfetch = true;
 bool		gp_dynamic_partition_pruning = true;
 bool		gp_log_dynamic_partition_pruning = false;
 bool		gp_cte_sharing = false;
@@ -2993,6 +2994,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		},
 		&gp_detect_data_correctness,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_enable_ao_fixed_size_indexfetch", PGC_USERSET, UNGROUPED,
+		gettext_noop("Enable/disable AO fixed size index fetch."),
+		NULL,
+		GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_ao_fixed_size_indexfetch,
+		true,
 		NULL, NULL, NULL
 	},
 

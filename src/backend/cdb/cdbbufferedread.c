@@ -200,16 +200,33 @@ BufferedReadIo(
 		}
 
 		if (actualLen == 0)
-			ereport(ERROR, (errcode_for_file_access(),
-							errmsg("read beyond eof in table \"%s\" file \"%s\", "
-								   "read position " INT64_FORMAT " (small offset %d), "
-								   "actual read length %d (large read length %d)",
-								   bufferedRead->relationName,
-								   bufferedRead->filePathName,
-								   bufferedRead->largeReadPosition,
-								   offset,
-								   actualLen,
-								   bufferedRead->largeReadLen)));
+		{
+			if (gp_enable_ao_fixed_size_indexfetch)
+			{
+				ereport(LOG, (errcode_for_file_access(),
+							  errmsg("read beyond eof in table \"%s\" file \"%s\", "
+									 "read position " INT64_FORMAT " (small offset %d), "
+									 "actual read length %d (large read length %d)",
+									 bufferedRead->relationName,
+									 bufferedRead->filePathName,
+									 bufferedRead->largeReadPosition,
+									 offset,
+									 actualLen,
+									 bufferedRead->largeReadLen)));
+				break;
+			}
+			else
+				ereport(ERROR, (errcode_for_file_access(),
+								errmsg("read beyond eof in table \"%s\" file \"%s\", "
+									"read position " INT64_FORMAT " (small offset %d), "
+									"actual read length %d (large read length %d)",
+									bufferedRead->relationName,
+									bufferedRead->filePathName,
+									bufferedRead->largeReadPosition,
+									offset,
+									actualLen,
+									bufferedRead->largeReadLen)));
+		}
 		else if (actualLen < 0)
 			ereport(ERROR, (errcode_for_file_access(),
 							errmsg("unable to read table \"%s\" file \"%s\", "
@@ -285,10 +302,20 @@ BufferedReadUseBeforeBuffer(
 
 	remainingFileLen = inEffectFileLen -
 		nextPosition;
-	if (remainingFileLen > bufferedRead->maxLargeReadLen)
-		nextReadLen = bufferedRead->maxLargeReadLen;
+	if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+	{
+		if (remainingFileLen > 0)
+			nextReadLen = bufferedRead->maxLargeReadLen;
+		else
+			nextReadLen = 0;
+	}
 	else
-		nextReadLen = (int32) remainingFileLen;
+	{
+		if (remainingFileLen > bufferedRead->maxLargeReadLen)
+			nextReadLen = bufferedRead->maxLargeReadLen;
+		else
+			nextReadLen = (int32) remainingFileLen;
+	}
 
 	Assert(nextReadLen >= 0);
 
@@ -314,13 +341,24 @@ BufferedReadUseBeforeBuffer(
 	 */
 	if (nextReadLen == 0)
 	{
-		ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+		if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+		{
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
 						errmsg("Unexpected internal error,"
 							   " largeReadLen is set to 0 before calling BufferedReadIo."
 							   " remainingFileLen is " INT64_FORMAT
 							   " inEffectFileLen is " INT64_FORMAT
 							   " nextPosition is " INT64_FORMAT,
 							   remainingFileLen, inEffectFileLen, nextPosition)));
+		}
+		else
+			ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
+							errmsg("Unexpected internal error,"
+								" largeReadLen is set to 0 before calling BufferedReadIo."
+								" remainingFileLen is " INT64_FORMAT
+								" inEffectFileLen is " INT64_FORMAT
+								" nextPosition is " INT64_FORMAT,
+								remainingFileLen, inEffectFileLen, nextPosition)));
 	}
 
 	BufferedReadIo(bufferedRead);
@@ -428,10 +466,21 @@ BufferedReadSetTemporaryRange(
 		bufferedRead->bufferOffset = 0;
 
 		remainingFileLen = afterFileOffset - beginFileOffset;
-		if (remainingFileLen > bufferedRead->maxLargeReadLen)
-			bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+		if (gp_enable_ao_fixed_size_indexfetch)
+		{
+			if (remainingFileLen > 0)
+				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+			else
+				bufferedRead->largeReadLen = 0;
+		}
+			
 		else
-			bufferedRead->largeReadLen = (int32) remainingFileLen;
+		{
+			if (remainingFileLen > bufferedRead->maxLargeReadLen)
+				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+			else
+				bufferedRead->largeReadLen = (int32) remainingFileLen;
+		}
 
 		bufferedRead->largeReadPosition = beginFileOffset;
 
@@ -525,10 +574,20 @@ BufferedReadGetNextBuffer(
 
 		remainingFileLen = inEffectFileLen -
 			bufferedRead->largeReadPosition;
-		if (remainingFileLen > bufferedRead->maxLargeReadLen)
-			bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+		if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+		{
+			if (remainingFileLen > 0)
+				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+			else
+				bufferedRead->largeReadLen = 0;
+		}
 		else
-			bufferedRead->largeReadLen = (int32) remainingFileLen;
+		{
+			if (remainingFileLen > bufferedRead->maxLargeReadLen)
+				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+			else
+				bufferedRead->largeReadLen = (int32) remainingFileLen;
+		}
 		if (bufferedRead->largeReadLen == 0)
 		{
 			/*
