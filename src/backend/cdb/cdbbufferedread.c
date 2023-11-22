@@ -183,11 +183,32 @@ BufferedReadIo(
 		if (track_io_timing)
 			INSTR_TIME_SET_CURRENT(io_start);
 
-		actualLen = FileRead(bufferedRead->file,
-							 (char *) largeReadMemory,
-							 largeReadLen,
-							 bufferedRead->fileOff,
-							 WAIT_EVENT_DATA_FILE_READ);
+		if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+		{
+			// int32 readlen = largeReadLen;
+
+			// if (readlen > bufferedRead->maxBufferLen)
+			// 	readlen = bufferedRead->maxBufferLen;
+
+			// actualLen = FileRead(bufferedRead->file,
+			// 					 (char *) largeReadMemory,
+			// 					 readlen,
+			// 					 bufferedRead->fileOff,
+			// 					 WAIT_EVENT_DATA_FILE_READ);
+
+			actualLen = FileRead(bufferedRead->file,
+								 (char *) largeReadMemory,
+								 BLCKSZ,
+								 bufferedRead->fileOff,
+								 WAIT_EVENT_DATA_FILE_READ);
+
+		}
+		else
+			actualLen = FileRead(bufferedRead->file,
+								 (char *) largeReadMemory,
+								 largeReadLen,
+								 bufferedRead->fileOff,
+								 WAIT_EVENT_DATA_FILE_READ);
 
 		SIMPLE_FAULT_INJECTOR("ao_storage_read_after_fileread");
 
@@ -238,6 +259,29 @@ BufferedReadIo(
 								   offset,
 								   actualLen,
 								   bufferedRead->largeReadLen)));
+
+		if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+		{
+			elogif(Debug_appendonly_print_read_block, LOG,
+				   "Append-Only storage read: table \"%s\", segment file \"%s\", read position " INT64_FORMAT " (small offset %d), "
+				   "actual read length %d (equals large read length %d is %s)",
+				   bufferedRead->relationName,
+				   bufferedRead->filePathName,
+				   bufferedRead->largeReadPosition,
+				   offset,
+				   actualLen,
+				   bufferedRead->largeReadLen,
+				   (actualLen == bufferedRead->largeReadLen ? "true" : "false"));
+	
+			if (largeReadLen < actualLen)
+			{
+				largeReadLen = 0;
+				largeReadMemory += largeReadLen;
+				offset += largeReadLen;
+				break;
+			}
+		}
+
 
 		bufferedRead->fileOff += actualLen;
 
@@ -302,16 +346,16 @@ BufferedReadUseBeforeBuffer(
 
 	remainingFileLen = inEffectFileLen -
 		nextPosition;
-	if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
-	{
-		if (remainingFileLen > bufferedRead->maxLargeReadLen)
-			nextReadLen = bufferedRead->maxLargeReadLen;
-		else if (remainingFileLen > 0)
-			nextReadLen = bufferedRead->maxBufferLen;
-		else
-			nextReadLen = 0;
-	}
-	else
+	// if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+	// {
+	// 	if (remainingFileLen > bufferedRead->maxLargeReadLen)
+	// 		nextReadLen = bufferedRead->maxLargeReadLen;
+	// 	else if (remainingFileLen > 0)
+	// 		nextReadLen = bufferedRead->maxBufferLen;
+	// 	else
+	// 		nextReadLen = 0;
+	// }
+	// else
 	{
 		if (remainingFileLen > bufferedRead->maxLargeReadLen)
 			nextReadLen = bufferedRead->maxLargeReadLen;
@@ -406,6 +450,9 @@ BufferedReadSetTemporaryRange(
 	Assert(bufferedRead != NULL);
 	Assert(bufferedRead->file >= 0);
 
+	if (gp_enable_ao_fixed_size_indexfetch)
+		bufferedRead->haveTemporaryLimitInEffect = true;
+
 	/*
 	 * Forget any current read buffer length (but not the offset!).
 	 */
@@ -468,16 +515,16 @@ BufferedReadSetTemporaryRange(
 		bufferedRead->bufferOffset = 0;
 
 		remainingFileLen = afterFileOffset - beginFileOffset;
-		if (gp_enable_ao_fixed_size_indexfetch)
-		{
-			if (remainingFileLen > bufferedRead->maxLargeReadLen)
-				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
-			if (remainingFileLen > 0)
-				bufferedRead->largeReadLen = bufferedRead->maxBufferLen;
-			else
-				bufferedRead->largeReadLen = 0;
-		}
-		else
+		// if (gp_enable_ao_fixed_size_indexfetch)
+		// {
+		// 	if (remainingFileLen > bufferedRead->maxLargeReadLen)
+		// 		bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+		// 	if (remainingFileLen > 0)
+		// 		bufferedRead->largeReadLen = bufferedRead->maxBufferLen;
+		// 	else
+		// 		bufferedRead->largeReadLen = 0;
+		// }
+		// else
 		{
 			if (remainingFileLen > bufferedRead->maxLargeReadLen)
 				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
@@ -577,16 +624,16 @@ BufferedReadGetNextBuffer(
 
 		remainingFileLen = inEffectFileLen -
 			bufferedRead->largeReadPosition;
-		if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
-		{
-			if (remainingFileLen > bufferedRead->maxLargeReadLen)
-				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
-			if (remainingFileLen > 0)
-				bufferedRead->largeReadLen = bufferedRead->maxBufferLen;
-			else
-				bufferedRead->largeReadLen = 0;
-		}
-		else
+		// if (gp_enable_ao_fixed_size_indexfetch && bufferedRead->haveTemporaryLimitInEffect)
+		// {
+		// 	if (remainingFileLen > bufferedRead->maxLargeReadLen)
+		// 		bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
+		// 	if (remainingFileLen > 0)
+		// 		bufferedRead->largeReadLen = bufferedRead->maxBufferLen;
+		// 	else
+		// 		bufferedRead->largeReadLen = 0;
+		// }
+		// else
 		{
 			if (remainingFileLen > bufferedRead->maxLargeReadLen)
 				bufferedRead->largeReadLen = bufferedRead->maxLargeReadLen;
