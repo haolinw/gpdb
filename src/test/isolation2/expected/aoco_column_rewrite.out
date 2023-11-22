@@ -942,17 +942,17 @@ ALTER TABLE
 EXECUTE attribute_encoding_check ('alter_column_other');
  relname            | attname | filenum | attoptions                                                  
 --------------------+---------+---------+-------------------------------------------------------------
- alter_column_other | b       | 2       | ['compresstype=none', 'blocksize=32768', 'compresslevel=0'] 
+ alter_column_other | b       | 1602    | ['compresstype=none', 'blocksize=32768', 'compresslevel=0'] 
  alter_column_other | c       | 3       | ['compresstype=none', 'blocksize=32768', 'compresslevel=0'] 
  alter_column_other | a       | 1       | ['compresstype=none', 'blocksize=32768', 'compresslevel=0'] 
 (3 rows)
 EXECUTE checkrelfilenodediff ('alter_column_other', 'alter_column_other');
  segid | casename           | relname            | rewritten 
 -------+--------------------+--------------------+-----------
- 2     | alter_column_other | alter_column_other | t         
- -1    | alter_column_other | alter_column_other | t         
- 0     | alter_column_other | alter_column_other | t         
- 1     | alter_column_other | alter_column_other | t         
+ 2     | alter_column_other | alter_column_other | f         
+ -1    | alter_column_other | alter_column_other | f         
+ 0     | alter_column_other | alter_column_other | f         
+ 1     | alter_column_other | alter_column_other | f         
 (4 rows)
 SELECT * FROM alter_column_other;
  a | b | c 
@@ -1032,10 +1032,10 @@ ALTER TABLE
 EXECUTE checkrelfilenodediff ('alter_column_constraints_fullrewrite', 'alter_column_constraints');
  segid | casename                             | relname                  | rewritten 
 -------+--------------------------------------+--------------------------+-----------
- -1    | alter_column_constraints_fullrewrite | alter_column_constraints | t         
- 0     | alter_column_constraints_fullrewrite | alter_column_constraints | t         
- 1     | alter_column_constraints_fullrewrite | alter_column_constraints | t         
- 2     | alter_column_constraints_fullrewrite | alter_column_constraints | t         
+ -1    | alter_column_constraints_fullrewrite | alter_column_constraints | f         
+ 2     | alter_column_constraints_fullrewrite | alter_column_constraints | f         
+ 0     | alter_column_constraints_fullrewrite | alter_column_constraints | f         
+ 1     | alter_column_constraints_fullrewrite | alter_column_constraints | f         
 (4 rows)
 
 --------------------------------------------------------------------------------

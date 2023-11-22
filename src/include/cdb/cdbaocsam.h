@@ -142,6 +142,8 @@ typedef struct AOCSFetchDescData
 	AppendOnlyVisimap visibilityMap;
 
 	Oid segrelid;
+
+	int64 *attnum_to_rownum; /*attnum to rownum mapping, used in building memtuple binding */
 } AOCSFetchDescData;
 
 typedef AOCSFetchDescData *AOCSFetchDesc;
@@ -229,6 +231,7 @@ typedef struct AOCSScanDescData
 		AttrNumber		   *proj_atts;
 		AttrNumber			num_proj_atts;
 
+		int64 			   *attnum_to_rownum; /*attnum to rownum mapping, used in building memtuple binding */
 		struct DatumStreamRead **ds;
 	} columnScanInfo;
 
@@ -330,7 +333,8 @@ typedef AOCSHeaderScanDescData *AOCSHeaderScanDesc;
 typedef enum AOCSWriteColumnOperation
 {
 	AOCSADDCOLUMN,  /* ADD COLUMN */
-	AOCSREWRITECOLUMN /* ALTER COLUMN TYPE */
+	AOCSREWRITECOLUMN, /* ALTER COLUMN TYPE */
+	AOCSADDCOLUMN_MISSINGMODE /* ADD COLUMN (missing mode) */
 } AOCSWriteColumnOperation;
 
 typedef struct AOCSWriteColumnDescData

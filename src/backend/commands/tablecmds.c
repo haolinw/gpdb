@@ -7233,6 +7233,7 @@ setupColumnOnlyRewrite(List **wqueue,
 					i != AT_PASS_ADD_COL && 
 					i != AT_PASS_ALTER_TYPE && 
 					i != AT_PASS_DROP && 
+					i != AT_PASS_ADD_CONSTR &&
 					tab->subcmds[i])
 		{
 			columnar_rewrite = false;
@@ -7303,6 +7304,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	AclResult	aclresult;
 	ObjectAddress address;
  	List* enc;
+	bool 		missingmode = true;
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
 	if (recursing)
@@ -7510,7 +7512,10 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 * rewrite
 		 */
 		if (!rawEnt->missingMode)
+		{
 			tab->rewrite |= AT_REWRITE_DEFAULT_VAL;
+			missingmode = false;
+		}
 	}
 
 	/*
@@ -7587,14 +7592,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 		/*
 		 * Handling of default NULL for ao_column tables.
-		 *
-		 * For ao_column tables, we won't rewrite the entire table but only the 
-		 * new column. However, we still need to generate a explicit NULL value so
-		 * we have something to write.
-		 * XXX: it would be even better if we could use pg_attribute.attmissingval 
-		 * and do not write the column at all. 
 		 */
-
 		if (!defval && RelationIsAoCols(rel))
 			defval = (Expr *) makeNullConst(typeOid, -1, collOid);
 
@@ -7609,7 +7607,10 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				newval->attnum = attribute.attnum;
 				newval->expr = expression_planner(defval);
 				newval->is_generated = (colDef->generated != '\0');
-				newval->op = AOCSADDCOLUMN;
+				if (missingmode)
+					newval->op = AOCSADDCOLUMN_MISSINGMODE;
+				else
+					newval->op = AOCSADDCOLUMN;
 
 				/*
 				 * tab is null if this is called by "create or replace view" which
@@ -7665,29 +7666,47 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 					!RelationIsAoCols(rel) /* errorOnEncodingClause */);
 
 	/*
-	 * Add a pg_attribute_encoding entry for ao_row tables, containing the last row numbers of each segfile.
+	 * Add a pg_attribute_encoding entry for the column.
+	 * For ao_row tables, only add if the column value is going to be missing
+	 * since only the lastrownums information is useful for them.
+	 * For ao_column tables, always add the entry.
 	 */
-	if (RelationStorageIsAoRows(rel))
+	if (RelationIsAoCols(rel) || (RelationStorageIsAoRows(rel) && missingmode))
 	{
 		Oid 	segrelid;
 		int64 	lastrownums[MAX_AOREL_CONCURRENCY];
+		Datum 	lastrownums_val = (Datum) 0;
 		List 	*filenums = GetNextNAvailableFilenums(myrelid, 1);
+		Datum 	attoptions = (Datum) 0;
 
-		GetAppendOnlyEntryAuxOids(rel, &segrelid, NULL, NULL);
-		ReadAllLastSequences(segrelid, lastrownums);
+		/* lastrownums are only for both ao_row and ao_column table w/ storage (i.e. not partitioned table) */
+		if (RelationStorageIsAO(rel) && missingmode)
+		{
+			GetAppendOnlyEntryAuxOids(rel, &segrelid, NULL, NULL);
+			ReadAllLastSequences(segrelid, lastrownums);
+			lastrownums_val = transform_lastrownums(lastrownums);
+		}
+
+		/* encoding options are only for CO tables */
+		if (RelationIsAoCols(rel))
+		{
+			/* we're adding one column at a time */
+			Assert(enc->length == 1);
+			ColumnReferenceStorageDirective *crsd = lfirst(list_head(enc));
+			attoptions = transformRelOptions(PointerGetDatum(NULL),
+											 crsd->encoding,
+											 NULL,
+											 NULL,
+											 true,
+											 false);
+		}
 
 		add_attribute_encoding_entry(myrelid, 
 									newattnum, 
 									linitial_int(filenums), 
-									transform_lastrownums(lastrownums), 
-									(Datum) 0/*attoptions (not used by ao_row)*/);
+									lastrownums_val,
+									attoptions);
 	}
-
-	/* 
-	 * Store the encoding clause for AO/CO tables.
-	 */
-	if (RelationIsAoCols(rel))
-		AddCOAttributeEncodings(myrelid, enc);
 
 	/* MPP-6929: metadata tracking */
 	if ((Gp_role == GP_ROLE_DISPATCH) && MetaTrackValidKindNsp(rel->rd_rel))
@@ -12962,20 +12981,6 @@ ATExecAlterColumnType(List **wqueue,
 	ObjectAddress address;
 
 	/*
-	 * Clear all the missing values if we're rewriting the table, since this
-	 * renders them pointless.
-	 */
-	if (tab->rewrite)
-	{
-		Relation	newrel;
-
-		newrel = table_open(RelationGetRelid(rel), NoLock);
-		RelationClearMissing(newrel);
-		relation_close(newrel, NoLock);
-		/* make sure we don't conflict with later attribute modifications */
-		CommandCounterIncrement();
-	}
-	/*
 	 * Leave a flag on tables in the partition hierarchy that can benefit from the
 	 * optimization for columnar tables.
 	 * We have to do it while processing the root partition because that's the
@@ -12986,8 +12991,28 @@ ATExecAlterColumnType(List **wqueue,
 	 * to perform the column optimized rewrite.
 	 * So, we only need to execute this block on QD.
 	 */
-		if ((tab->relkind == RELKIND_PARTITIONED_TABLE || tab->relkind == RELKIND_RELATION) && Gp_role != GP_ROLE_EXECUTE)
-			setupColumnOnlyRewrite(wqueue, tab, AT_AlterColumnType);
+	if ((tab->relkind == RELKIND_PARTITIONED_TABLE || tab->relkind == RELKIND_RELATION) && Gp_role != GP_ROLE_EXECUTE)
+		setupColumnOnlyRewrite(wqueue, tab, AT_AlterColumnType);
+
+	/*
+	 * Clear all the missing values if we're rewriting the table, since this
+	 * renders them pointless.
+	 * GPDB: we are not rewriting CO tables, only the column. So only clear the
+	 * column that we are altering.
+	 */
+	if (tab->rewrite)
+	{
+		Relation	newrel;
+
+		newrel = table_open(RelationGetRelid(rel), NoLock);
+		if (RelationIsAoCols(newrel) && tab->rewrite & AT_REWRITE_REWRITE_COLUMNS_ONLY)
+			RelationClearMissingByAttname(newrel, colName);
+		else
+			RelationClearMissing(newrel);
+		relation_close(newrel, NoLock);
+		/* make sure we don't conflict with later attribute modifications */
+		CommandCounterIncrement();
+	}
 
 
 	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
