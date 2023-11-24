@@ -3938,6 +3938,17 @@ struct config_int ConfigureNamesInt_gp[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"gp_aovisimap_allvisibleset_size", PGC_USERSET, GP_ARRAY_TUNING,
+			gettext_noop("Number of entries one row in a block directory table contains."),
+			gettext_noop("Use smaller value in non-bulk load cases."),
+			GUC_UNIT_KB | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&gp_aovisimap_allvisibleset_size,
+		NUM_MINIPAGE_ENTRIES, 1, NUM_MINIPAGE_ENTRIES,
+		NULL, NULL, NULL
+	},
+
 
 	{
 		{"gp_segworker_relative_priority", PGC_POSTMASTER, RESOURCES_MGM,
