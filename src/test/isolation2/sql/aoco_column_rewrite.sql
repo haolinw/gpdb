@@ -587,6 +587,98 @@ execute attribute_encoding_check('atsetenc');
 -- results all good
 select * from atsetenc;
 
+-- 6. GENERATED new column value by existing column
+drop table if exists ataddcolgenerated;
+create table ataddcolgenerated (a int, b text) using ao_column;
+insert into ataddcolgenerated select i,'str_' || i::text from generate_series(1, 5)i;
+select * from ataddcolgenerated;
+alter table ataddcolgenerated add column c int generated always as (a * a) stored;
+alter table ataddcolgenerated add column d text generated always as (a::text || ',' || a::text) stored;
+alter table ataddcolgenerated add column e text generated always as (right(b, 2)) stored;
+-- with UDF
+create or replace function pylen(a text) returns int as $$
+return (len(a.split('_')))
+$$ immutable language plpython3u;
+alter table ataddcolgenerated add column f int generated always as (pylen(b)) stored;
+select * from ataddcolgenerated;
+-- external table
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text) execute 'echo 1, str_1' on coordinator format 'csv';
+select * from ataddcolgeneratedext;
+alter table ataddcolgeneratedext add column c int generated always as (a * a) stored;
+alter table ataddcolgeneratedext add column d text generated always as (a::text || ',' || a::text) stored;
+alter table ataddcolgeneratedext add column e int generated always as (pylen(b)) stored;
+select * from ataddcolgeneratedext;
+alter table ataddcolgeneratedext add column f int default 10;
+select * from ataddcolgeneratedext;
+-- partitioned table
+drop table if exists ataddcolgenpart;
+create table ataddcolgenpart(a int, b text, c int) using ao_column partition by range (c) (start(1) end(11) every (2));
+insert into ataddcolgenpart select i,'str_' || i::text,i from generate_series(1, 10)i;
+select * from ataddcolgenpart;
+alter table ataddcolgenpart add column d text generated always as ('d') stored;
+alter table ataddcolgenpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table ataddcolgenpart add column f text generated always as (pylen(b)) stored;
+select * from ataddcolgenpart;
+-- mixed partitions: case1, parent on ao_column, children on heap, ao_row, ao_column
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=true, orientation=column) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row),
+    start (26) end (31) with (appendonly=true, orientation=column)
+);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+-- mixed partitions: case2, parent on ao_row, children on heap, ao_row, ao_column, attach external partition
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=true, orientation=row) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row),
+    start (26) end (31) with (appendonly=true, orientation=column)
+);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+-- external partition
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text, c int) execute 'echo 21,str_21,21' on coordinator format 'csv';
+alter table aocomixedpart attach partition ataddcolgeneratedext for values from (31) to (36);
+select * from aocomixedpart;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+-- mixed partitions: case3, parent on heap, children on heap, ao_row, ao_column, exchange with external partition
+drop table if exists aocomixedpart;
+create table aocomixedpart (a int, b text, c int) with (appendonly=false) partition by range(c)
+(
+    start (1) end (6) with (appendonly=false),
+    start (6) end (11) with (appendonly=true, orientation=row),
+    start (11) end (16) with (appendonly=true, orientation=column),
+    start (16) end (21) with (appendonly=false),
+    start (21) end (26) with (appendonly=true, orientation=row)
+);
+alter table aocomixedpart add partition exch_part start (26) end (31);
+insert into aocomixedpart select i,'str_' || i::text,i from generate_series(1, 30)i;
+-- external partition
+drop external table if exists ataddcolgeneratedext;
+create external web table ataddcolgeneratedext (a int, b text, c int) execute 'echo 21,str_21,21' on coordinator format 'csv';
+alter table aocomixedpart exchange partition exch_part with table ataddcolgeneratedext;
+select * from aocomixedpart;
+alter table aocomixedpart add column d text generated always as ('d') stored;
+alter table aocomixedpart add column e text generated always as (a::text || ',' || right(b, 2)) stored;
+alter table aocomixedpart add column f text generated always as (pylen(b)) stored;
+select * from aocomixedpart;
+
 --
 -- partition table
 --
@@ -611,4 +703,3 @@ execute attribute_encoding_check('atsetencpart_p2');
 execute attribute_encoding_check('atsetencpart_def');
 -- results are expected
 select sum(a), sum(b) from atsetencpart;
-

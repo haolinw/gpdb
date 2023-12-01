@@ -7265,7 +7265,35 @@ setupColumnOnlyRewrite(List **wqueue,
 			if (RelationIsAoCols(rel))
 			{
 				if (ATtype == AT_AddColumn)
+				{
+					ListCell *l;
+
 					childtab->rewrite |= AT_REWRITE_NEW_COLUMNS_ONLY;
+
+					foreach(l, childtab->newvals)
+					{
+						NewColumnValue *nv = lfirst(l);
+						if (nv->is_generated && contain_var_clause((Node *)nv->expr))
+						{
+							/* 
+							 * For a generated column, if the expression contains Var,
+							 * it indicates the new column value needs to be calculated
+							 * based on existing column, in this case we need to fallback
+							 * to ATRewriteTable() to do table scan instead of scanning
+							 * varblock header only.
+							 * 
+							 * TODO: currently we scan all columns in ATRewriteTable(),
+							 * it is optimizable to only scan the required columns.
+							 * 
+							 * Note, for partitioned table, we clear the flag for parent
+							 * only as newvals is null for children; we  clear it in
+							 * recursive ATExecAddColumn() for children.
+							 */
+							childtab->rewrite &= ~AT_REWRITE_NEW_COLUMNS_ONLY;
+							break;
+						}
+					}
+				}
 				else if (ATtype == AT_AlterColumnType || ATtype == AT_SetColumnEncoding)
 					childtab->rewrite |= AT_REWRITE_REWRITE_COLUMNS_ONLY;
 				else
@@ -7600,7 +7628,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 		if (defval)
 		{
-			NewColumnValue *newval;
+			NewColumnValue *newval = NULL;
 
 			/* If QE, AlteredTableInfo streamed from QD already contains newcolvals */
 			if (Gp_role != GP_ROLE_EXECUTE)
@@ -7617,6 +7645,21 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				 */
 				Assert(tab);
 				tab->newvals = lappend(tab->newvals, newval);
+
+				/*
+				 * Assuming AT_REWRITE_NEW_COLUMNS_ONLY is only for AOCO tables.
+				 *
+				 * Similar like setupColumnOnlyRewrite(), we need to clear
+				 * AT_REWRITE_NEW_COLUMNS_ONLY to fallback to do table scan instead
+				 * of varblock header only scan for partitions in the case of
+				 * generating column based on existing column values.
+				 * 
+				 * TODO: currently we scan all columns in ATRewriteTable(),
+				 * it is optimizable to only scan the required columns.
+				 */
+				if (tab->rewrite & AT_REWRITE_NEW_COLUMNS_ONLY &&
+					newval->is_generated && contain_var_clause((Node *)newval->expr))
+					tab->rewrite &= ~AT_REWRITE_NEW_COLUMNS_ONLY;
 			}
 			else
 			{
