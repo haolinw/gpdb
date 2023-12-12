@@ -206,6 +206,7 @@
 		"gp_pause_on_restore_point_replay",
 		"gp_postmaster_inet_address_family",
 		"gp_print_create_gang_time",
+		"gp_enable_aoco_generate_column",
 		"gp_qd_hostname",
 		"gp_qd_port",
 		"gp_recursive_cte",

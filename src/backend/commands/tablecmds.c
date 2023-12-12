@@ -139,6 +139,8 @@
 #include "cdb/cdboidsync.h"
 #include "postmaster/autostats.h"
 
+extern bool gp_enable_aoco_generate_column;
+
 const char *synthetic_sql = "(internally generated SQL command)";
 
 /*
@@ -7270,25 +7272,26 @@ setupColumnOnlyRewrite(List **wqueue,
 
 					childtab->rewrite |= AT_REWRITE_NEW_COLUMNS_ONLY;
 
+					if (gp_enable_aoco_generate_column)
 					foreach(l, childtab->newvals)
 					{
 						NewColumnValue *nv = lfirst(l);
 						if (nv->is_generated && contain_var_clause((Node *)nv->expr))
 						{
 							/* 
-							 * For a generated column, if the expression contains Var,
-							 * it indicates the new column value needs to be calculated
-							 * based on existing column, in this case we need to fallback
-							 * to ATRewriteTable() to do table scan instead of scanning
-							 * varblock header only.
-							 * 
-							 * TODO: currently we scan all columns in ATRewriteTable(),
-							 * it is optimizable to only scan the required columns.
-							 * 
-							 * Note, for partitioned table, we clear the flag for parent
-							 * only as newvals is null for children; we  clear it in
-							 * recursive ATExecAddColumn() for children.
-							 */
+							* For a generated column, if the expression contains Var,
+							* it indicates the new column value needs to be calculated
+							* based on existing column, in this case we need to fallback
+							* to ATRewriteTable() to do table scan instead of scanning
+							* varblock header only.
+							* 
+							* TODO: currently we scan all columns in ATRewriteTable(),
+							* it is optimizable to only scan the required columns.
+							* 
+							* Note, for partitioned table, we clear the flag for parent
+							* only as newvals is null for children; we  clear it in
+							* recursive ATExecAddColumn() for children.
+							*/
 							childtab->rewrite &= ~AT_REWRITE_NEW_COLUMNS_ONLY;
 							break;
 						}
@@ -7628,7 +7631,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 		if (defval)
 		{
-			NewColumnValue *newval = NULL;
+			NewColumnValue *newval;
 
 			/* If QE, AlteredTableInfo streamed from QD already contains newcolvals */
 			if (Gp_role != GP_ROLE_EXECUTE)
@@ -7646,6 +7649,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				Assert(tab);
 				tab->newvals = lappend(tab->newvals, newval);
 
+				if (gp_enable_aoco_generate_column)
 				/*
 				 * Assuming AT_REWRITE_NEW_COLUMNS_ONLY is only for AOCO tables.
 				 *

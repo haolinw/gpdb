@@ -155,6 +155,7 @@ bool		Debug_datumstream_write_use_small_initial_buffers = false;
 bool		gp_create_table_random_default_distribution = true;
 bool		gp_allow_non_uniform_partitioning_ddl = true;
 bool		gp_print_create_gang_time = false;
+bool		gp_enable_aoco_generate_column = true;
 int			dtx_phase2_retry_second = 0;
 
 bool gp_log_suboverflow_statement = false;
@@ -3033,6 +3034,17 @@ struct config_bool ConfigureNamesBool_gp[] =
 		GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&gp_detect_data_correctness,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_enable_aoco_generate_column", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Allow print information about create gang time."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_enable_aoco_generate_column,
 		false,
 		NULL, NULL, NULL
 	},
