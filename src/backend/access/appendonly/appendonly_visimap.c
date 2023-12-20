@@ -70,6 +70,13 @@ typedef struct AppendOnlyVisiMapDeleteData
 	ItemPointerData tupleTid;
 } AppendOnlyVisiMapDeleteData;
 
+typedef struct AppendOnlyVisimapRangeEntry
+{
+	AppendOnlyVisiMapDeleteKey key;
+
+	int rangeid;
+	bool allvisible;
+} AppendOnlyVisimapRangeEntry;
 
 
 static void AppendOnlyVisimap_Store(
@@ -177,6 +184,92 @@ AppendOnlyVisimap_Find(
 	}
 }
 
+// static inline void
+// AppendOnlyVisimapCache_GetRangeId(AOTupleId *aotid, AOTupleId *rangeid)
+// {
+// 	int segno = AOTupleIdGet_segmentFileNum(aotid);
+// 	int64 rowno = AOTupleIdGet_rowNum(aotid);
+// 	int64 firstrowno = APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(rowno);
+
+// 	AOTupleIdInit(rangeid, segno, firstrowno);
+// }
+
+static bool
+AppendOnlyVisimapCache_Lookup(
+							  AppendOnlyVisimap *visiMap,
+							  AOTupleId *aoTupleId)
+{
+	bool found;
+	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisimapRangeEntry *rentry;
+
+	Assert(visiMap);
+
+	elogif(Debug_appendonly_print_visimap, LOG,
+		   "Append-only visi map: Lookup cache for "
+		   "(tupleId) = %s",
+		   AOTupleIdToString(aoTupleId));
+	
+	key.segno = AOTupleIdGet_segmentFileNum(aoTupleId);
+	key.firstRowNum = APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(AOTupleIdGet_rowNum(aoTupleId));
+
+	/* calculate a hash key {segno, firstrowno} based on aoTupleId */
+	// AppendOnlyVisimapCache_GetRangeId(aoTupleId, &rangeid);
+	rentry = (AppendOnlyVisimapRangeEntry *)hash_search(visiMap->cache.rangetab, (void *) &key, HASH_FIND, &found);
+	if (found)
+	{
+		// TODO: Assert(visiMap->cache.rangeids[rentry->rangeid]);
+
+		return rentry->allvisible;
+		// return visiMap->cache.ranges[rentry->rangeid].allvisible;
+	}
+	else
+	{
+		/* if necessary persist the current entry before moving. */
+		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+		{
+			AppendOnlyVisimap_Store(visiMap);
+		}
+
+		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+
+		/* fill range */
+		ranges[rangeid] = ...;
+	}
+
+	return false;
+}
+
+typedef struct AppendOnlyVisimapRangeDesc
+{
+	int nextFree;
+	int lruMoreRecently;
+	int lruLessRecently;
+} AppendOnlyVisimapRangeDesc;
+
+static int get_free_rangeid(AppendOnlyVisimapCache *cache)
+{
+	int newsize;
+
+	int rangeid = cache->rangeids[0].nextFree;
+	if (rangeid > 0)
+	{
+		cache->rangeids[0].nextFree = cache->rangeids[rangeid].nextFree;
+		return rangeid;
+	}
+
+	Assert(rangeid == 0);
+
+	newsize = cache.size * 2;
+	if (newsize <= gp_aovisimap_max_cache_size)
+	{
+
+	}
+
+	/* need to free the least recently used slot */
+
+}
+
 /*
  * Checks if a tuple is visible according to the visibility map.
  * A positive result is a necessary but not sufficient condition for
@@ -195,6 +288,15 @@ AppendOnlyVisimap_IsVisible(
 		   "Append-only visi map: Visibility check: "
 		   "(tupleId) = %s",
 		   AOTupleIdToString(aoTupleId));
+
+	if (gp_enable_aovisimap_cache)
+	{
+		if (AppendOnlyVisimapCache_Lookup(visiMap, aoTupleId))
+			return true;
+
+		return AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
+												aoTupleId);
+	}
 
 	if (!AppendOnlyVisimapEntry_CoversTuple(&visiMap->visimapEntry,
 											aoTupleId))
