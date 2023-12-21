@@ -45,18 +45,29 @@
 #define APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(rownum) \
 	((rownum) & ~(APPENDONLY_VISIMAP_MAX_RANGE - 1))
 
-typedef struct AppendOnlyVisimapRange
+// typedef struct AppendOnlyVisimapRange
+// {
+// 	int segno;
+// 	int64 firstrowno;
+
+// 	bool allvisible;
+// } AppendOnlyVisimapRange;
+
+typedef struct AppendOnlyVisimapRangeEntry
 {
-	int segno;
-	int64 firstrowno;
+	int status;
+	int nextfree;
+	int morerecently; /* pointing to the pre element of the LRU list */
+	int lessrecently; /* pointing to the post element of the LRU list */
 
 	bool allvisible;
-} AppendOnlyVisimapRange;
+} AppendOnlyVisimapRangeEntry;
 
 typedef struct AppendOnlyVisimapCache
 {
 	HTAB *rangetab;
-	int *rangeids;
+	AppendOnlyVisimapRangeEntry *rentries;
+	int nentries;
 } AppendOnlyVisimapCache;
 
 /*

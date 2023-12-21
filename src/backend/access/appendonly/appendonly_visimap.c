@@ -70,13 +70,12 @@ typedef struct AppendOnlyVisiMapDeleteData
 	ItemPointerData tupleTid;
 } AppendOnlyVisiMapDeleteData;
 
-typedef struct AppendOnlyVisimapRangeEntry
+typedef struct AppendOnlyVisimapRange
 {
 	AppendOnlyVisiMapDeleteKey key;
 
 	int rangeid;
-	bool allvisible;
-} AppendOnlyVisimapRangeEntry;
+} AppendOnlyVisimapRange;
 
 
 static void AppendOnlyVisimap_Store(
@@ -194,14 +193,15 @@ AppendOnlyVisimap_Find(
 // 	AOTupleIdInit(rangeid, segno, firstrowno);
 // }
 
-static bool
-AppendOnlyVisimapCache_Lookup(
+static int
+AppendOnlyVisimapCache_Find(
 							  AppendOnlyVisimap *visiMap,
 							  AOTupleId *aoTupleId)
 {
 	bool found;
 	AppendOnlyVisiMapDeleteKey key;
-	AppendOnlyVisimapRangeEntry *rentry;
+	AppendOnlyVisimapRange *range;
+	int rangeid = 0;
 
 	Assert(visiMap);
 
@@ -215,59 +215,149 @@ AppendOnlyVisimapCache_Lookup(
 
 	/* calculate a hash key {segno, firstrowno} based on aoTupleId */
 	// AppendOnlyVisimapCache_GetRangeId(aoTupleId, &rangeid);
-	rentry = (AppendOnlyVisimapRangeEntry *)hash_search(visiMap->cache.rangetab, (void *) &key, HASH_FIND, &found);
+	range = (AppendOnlyVisimapRange *)hash_search(visiMap->cache.rangetab, (void *) &key, HASH_FIND, &found);
 	if (found)
 	{
-		// TODO: Assert(visiMap->cache.rangeids[rentry->rangeid]);
+		// TODO: Assert(visiMap->cache.rentries[rentry->rangeid]);
+		rangeid = range->rangeid;
+		AppendOnlyVisimapRangeEntry *rentry = get_range_entry(visiMap->cache, rangeid);
 
 		return rentry->allvisible;
 		// return visiMap->cache.ranges[rentry->rangeid].allvisible;
 	}
 	else
 	{
-		/* if necessary persist the current entry before moving. */
-		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
-		{
-			AppendOnlyVisimap_Store(visiMap);
-		}
+		// /* if necessary persist the current entry before moving. */
+		// if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+		// {
+		// 	AppendOnlyVisimap_Store(visiMap);
+		// }
 
-		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+		// AppendOnlyVisimap_Find(visiMap, aoTupleId);
 
-		/* fill range */
-		ranges[rangeid] = ...;
+		// /* fill range */
+		// ranges[rangeid] = ...;
 	}
 
 	return false;
 }
 
-typedef struct AppendOnlyVisimapRangeDesc
+static void
+AppendOnlyVisimapCache_Delete(AppendOnlyVisimapCache *cache, int idx)
 {
-	int nextFree;
-	int lruMoreRecently;
-	int lruLessRecently;
-} AppendOnlyVisimapRangeDesc;
+	AppendOnlyVisimapRangeEntry *rangeid = cache->rentries[idx];
 
-static int get_free_rangeid(AppendOnlyVisimapCache *cache)
+	rangeid->status = -1;
+	cache->rentries[rangeid->lessrecently].morerecently = rangeid->morerecently;
+	cache->rentries[rangeid->morerecently].lessrecently = rangeid->lessrecently;
+}
+
+static void
+AppendOnlyVisimapCache_Free(AppendOnlyVisimapCache *cache, int idx)
+{
+	AppendOnlyVisimapRangeEntry *rangeid = cache->rentries[idx];
+
+	rangeid->status = -1;
+	rangeid->nextfree = cache->rentries[0].nextfree;
+	cache->rentries[0].nextfree = idx;
+}
+
+static int
+get_free_rangeid(AppendOnlyVisimapCache *cache)
 {
 	int newsize;
+	int nextfree;
 
-	int rangeid = cache->rangeids[0].nextFree;
-	if (rangeid > 0)
+	if (cache->rentries[0].nextfree > 0)
 	{
-		cache->rangeids[0].nextFree = cache->rangeids[rangeid].nextFree;
-		return rangeid;
+		nextfree = cache->rentries[0].nextfree;
+		cache->rentries[0].nextfree = cache->rentries[nextfree].nextfree;
+	}
+	else if (cache->nentries < gp_aovisimap_max_cache_size)
+	{
+		AppendOnlyVisimapRangeEntry *newrangeids;
+
+		newsize = cache->nentries * 2;
+		if (newsize > gp_aovisimap_max_cache_size)
+			newsize = gp_aovisimap_max_cache_size;
+
+		// TODO: MemeoryContext guard
+		// Assert();
+
+		newrangeids = (AppendOnlyVisimapRangeEntry *)repalloc(cache->rentries, sizeof(AppendOnlyVisimapRangeEntry) * newsize);
+		if (newrangeids == NULL)
+			ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("Out of memory")));
+
+		cache->rentries = newrangeids;
+		for (int i = cache->nentries; i < newsize; i++)
+		{
+			cache->rentries[i].status = -1;
+			cache->rentries[i].nextfree = i + 1;
+			cache->rentries[i].morerecently = 0;
+			cache->rentries[i].lessrecently = 0;
+		}
+		cache->rentries[newsize - 1].nextfree = 0;
+		cache->rentries[0].nextfree = cache->nentries;
+		cache->nentries = newsize;
+
+		nextfree = cache->rentries[0].nextfree;
+	}
+	else
+	{
+		// AppendOnlyVisimapCache_Free(cache, cache->rentries[0].morerecently);
+
+		/* need to evict the tail of the LRU list */
+		int idx = cache->rentries[0].morerecently;
+		AppendOnlyVisimapRangeEntry *rangeid = cache->rentries[idx];
+
+		rangeid->status = -1;
+		rangeid->nextfree = cache->rentries[0].nextfree;
+		cache->rentries[0].nextfree = idx;
+
+		nextfree = cache->rentries[0].nextfree;
 	}
 
-	Assert(rangeid == 0);
+	return nextfree;
+}
 
-	newsize = cache.size * 2;
-	if (newsize <= gp_aovisimap_max_cache_size)
+static AppendOnlyVisimapRangeEntry *
+get_range_entry(AppendOnlyVisimapCache *cache, int rangeid)
+{
+	Assert(rangeid > 0 && rangeid <= cache->nentries);
+
+	AppendOnlyVisimapRangeEntry *rentry = cache->rentries[rangeid];
+
+	/* free entry */
+	if (rentry->status < 0)
 	{
+		Assert(!rentry->allvisible);
 
+		AppendOnlyVisimapCache_Insert(cache, rangeid);
+	}
+	else if (cache->rentries[0].lessrecently != rangeid)
+	{
+		/* delete then insert */
+		AppendOnlyVisimapCache_Delete(cache, rangeid);
+		AppendOnlyVisimapCache_Insert(cache, rangeid);
 	}
 
-	/* need to free the least recently used slot */
+	return rentry;
+}
 
+static inline bool
+check_range_allvisible(AppendOnlyVisimapCache *cache, int rangeid)
+{
+	Assert(rangeid > 0 && rangeid <= cache->nentries);
+
+	return cache->rentries[rangeid].allvisible;
+}
+
+static inline void
+update_range_allvisible(AppendOnlyVisimapCache *cache, int rangeid, bool allvisible)
+{
+	Assert(rangeid > 0 && rangeid <= cache->nentries);
+
+	cache->rentries[rangeid].allvisible = allvisible;
 }
 
 /*
@@ -291,11 +381,27 @@ AppendOnlyVisimap_IsVisible(
 
 	if (gp_enable_aovisimap_cache)
 	{
-		if (AppendOnlyVisimapCache_Lookup(visiMap, aoTupleId))
-			return true;
+		bool inAllVisible, result;
+		int rangeid = AppendOnlyVisimapCache_Find(visiMap, aoTupleId);
 
-		return AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
-												aoTupleId);
+		if (check_range_allvisible(visiMap->cache, rangeid))
+			return true;
+		
+		/* if necessary persist the current entry before moving. */
+		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+		{
+			AppendOnlyVisimap_Store(visiMap);
+		}
+
+		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+
+		result = AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
+												  aoTupleId,
+												  &inAllVisible);
+
+		update_range_allvisible(visiMap->cache, rangeid, inAllVisible);
+
+		return result;
 	}
 
 	if (!AppendOnlyVisimapEntry_CoversTuple(&visiMap->visimapEntry,
