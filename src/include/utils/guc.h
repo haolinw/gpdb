@@ -616,7 +616,7 @@ extern bool gp_allow_date_field_width_5digits;
 
 extern bool gp_enable_blkdir_sampling;
 
-extern bool gp_enable_aovisimap_cache;
+extern int gp_aovisimap_max_cache_size;
 
 typedef enum
 {

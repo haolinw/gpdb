@@ -445,7 +445,7 @@ double		optimizer_jit_optimize_above_cost;
 /* Switch to toggle block-directory based sampling for AO/CO tables */
 bool		gp_enable_blkdir_sampling;
 
-bool		gp_enable_aovisimap_cache;
+int			gp_aovisimap_max_cache_size;
 
 static const struct config_enum_entry gp_log_format_options[] = {
 	{"text", 0},
@@ -653,16 +653,6 @@ struct config_bool ConfigureNamesBool_gp[] =
 		 GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&gp_enable_blkdir_sampling,
-		true,
-		NULL, NULL, NULL
-	},
-	{
-		{"gp_enable_aovisimap_cache", PGC_USERSET, DEVELOPER_OPTIONS,
-		 gettext_noop("Enables append-optimized visimaplity map caching."),
-		 NULL,
-		 GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
-		},
-		&gp_enable_aovisimap_cache,
 		true,
 		NULL, NULL, NULL
 	},
@@ -4332,6 +4322,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		NULL, NULL, NULL
 	},
 #endif
+
+	{
+		{"gp_aovisimap_max_cache_size", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Set the max number of aovisimap cache entries."),
+			NULL
+		},
+		&gp_aovisimap_max_cache_size,
+		32, 0, 8192,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{
