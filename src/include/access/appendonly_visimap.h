@@ -42,6 +42,27 @@
 #define APPENDONLY_VISIMAP_MAX_BITMAP_WORD_COUNT \
 	(APPENDONLY_VISIMAP_MAX_BITMAP_SIZE / sizeof(bitmapword))
 
+#define APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(rownum) \
+	((rownum) & ~(APPENDONLY_VISIMAP_MAX_RANGE - 1))
+
+typedef struct AppendOnlyVisimapRangeEntry
+{
+	int status;
+	int nextfree;
+	int morerecently; /* pointing to the pre element of the LRU list */
+	int lessrecently; /* pointing to the post element of the LRU list */
+
+	bool allvisible;
+} AppendOnlyVisimapRangeEntry;
+
+typedef struct AppendOnlyVisimapCache
+{
+	HTAB *rangetab;
+	AppendOnlyVisimapRangeEntry *rentries;
+	int nentries;
+	MemoryContext mctx;
+} AppendOnlyVisimapCache;
+
 /*
  * Data structure for the ao visibility map processing.
  *
@@ -63,6 +84,13 @@ typedef struct AppendOnlyVisimap
 	 * Support operations to search, load, and store visibility map entries.
 	 */
 	AppendOnlyVisimapStore visimapStore;
+
+	/*
+	 * A range cache for visibility map query optimization,
+	 * the range aligns with a visimap entry, caching "allvisibleset"
+	 * to determine whether needs to query catalog or not.
+	 */
+	AppendOnlyVisimapCache visimapCache;
 
 } AppendOnlyVisimap;
 
