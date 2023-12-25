@@ -405,7 +405,7 @@ AppendOnlyVisimapScan_Finish(AppendOnlyVisimapScan *visiMapScan,
  * Hash function for the visimap deletion hash table.
  */
 static uint32
-hash_delete_key(const void *key, Size keysize)
+hash_entry_key(const void *key, Size keysize)
 {
 	Assert(keysize == sizeof(AppendOnlyVisiMapEntryKey));
 	return DatumGetUInt32(hash_any((const unsigned char *) key,
@@ -451,7 +451,7 @@ AppendOnlyVisimapDelete_Init(
 	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
 	hash_ctl.keysize = sizeof(AppendOnlyVisiMapEntryKey);
 	hash_ctl.entrysize = sizeof(AppendOnlyVisiMapDeleteData);
-	hash_ctl.hash = hash_delete_key;
+	hash_ctl.hash = hash_entry_key;
 	hash_ctl.match = hash_compare_keys;
 	hash_ctl.hcxt = visiMap->memoryContext;
 	visiMapDelete->dirtyEntryCache = hash_create("VisimapEntryCache",
