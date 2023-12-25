@@ -68,6 +68,7 @@ typedef struct AppendOnlyVisimapCache
 	HTAB *rangetab;
 	AppendOnlyVisimapRangeEntry *rentries;
 	int nentries;
+	MemoryContext mctx;
 } AppendOnlyVisimapCache;
 
 /*
@@ -92,7 +93,7 @@ typedef struct AppendOnlyVisimap
 	 */
 	AppendOnlyVisimapStore visimapStore;
 
-	AppendOnlyVisimapCache cache;
+	AppendOnlyVisimapCache visimapCache;
 
 } AppendOnlyVisimap;
 
