@@ -25,9 +25,9 @@
 #include "utils/snapmgr.h"
 
 /*
- * Key structure for the visimap deletion hash table.
+ * Key structure for the visimap entry hash table.
  */
-typedef struct AppendOnlyVisiMapDeleteKey
+typedef struct AppendOnlyVisiMapEntryKey
 {
 	/*
 	 * Segno of the dirty visimap entry.
@@ -36,7 +36,7 @@ typedef struct AppendOnlyVisiMapDeleteKey
 	 * (4-bytes), additional 4-bytes were being used for padding. The padding
 	 * bits may differ for two keys causing two otherwise equal objects to be
 	 * treated as unequal by hash functions. Keeping type to uint64 does not
-	 * change the value of sizeof(AppendOnlyVisiMapDeleteKey) but eliminates
+	 * change the value of sizeof(AppendOnlyVisiMapEntryKey) but eliminates
 	 * padding.
 	 */
 	uint64		segno;
@@ -45,7 +45,7 @@ typedef struct AppendOnlyVisiMapDeleteKey
 	 * First row num of the dirty visimap entry.
 	 */
 	uint64		firstRowNum;
-} AppendOnlyVisiMapDeleteKey;
+} AppendOnlyVisiMapEntryKey;
 
 /*
  * Key/Value structure for the visimap deletion hash table.
@@ -55,7 +55,7 @@ typedef struct AppendOnlyVisiMapDeleteData
 	/*
 	 * Key of the visimap entry
 	 */
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 
 	/*
 	 * Location of the latest dirty version of the visimap bitmap in the
@@ -407,22 +407,22 @@ AppendOnlyVisimapScan_Finish(AppendOnlyVisimapScan *visiMapScan,
 static uint32
 hash_delete_key(const void *key, Size keysize)
 {
-	Assert(keysize == sizeof(AppendOnlyVisiMapDeleteKey));
+	Assert(keysize == sizeof(AppendOnlyVisiMapEntryKey));
 	return DatumGetUInt32(hash_any((const unsigned char *) key,
 								   keysize));
 }
 
 /*
  * Hash function for comparing two keys of type
- * AppendOnlyVisiMapDeleteKey.  Equality of keys is of interest and
+ * AppendOnlyVisiMapEntryKey.  Equality of keys is of interest and
  * not ordering between them (greater/less).
  */
 static int
 hash_compare_keys(const void *key1, const void *key2, Size keysize)
 {
-	Assert(keysize == sizeof(AppendOnlyVisiMapDeleteKey));
-	AppendOnlyVisiMapDeleteKey *k1 = (AppendOnlyVisiMapDeleteKey *) key1;
-	AppendOnlyVisiMapDeleteKey *k2 = (AppendOnlyVisiMapDeleteKey *) key2;
+	Assert(keysize == sizeof(AppendOnlyVisiMapEntryKey));
+	AppendOnlyVisiMapEntryKey *k1 = (AppendOnlyVisiMapEntryKey *) key1;
+	AppendOnlyVisiMapEntryKey *k2 = (AppendOnlyVisiMapEntryKey *) key2;
 
 	if ((k1->segno == k2->segno) && (k1->firstRowNum == k2->firstRowNum))
 	{
@@ -449,7 +449,7 @@ AppendOnlyVisimapDelete_Init(
 	visiMapDelete->visiMap = visiMap;
 
 	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
-	hash_ctl.keysize = sizeof(AppendOnlyVisiMapDeleteKey);
+	hash_ctl.keysize = sizeof(AppendOnlyVisiMapEntryKey);
 	hash_ctl.entrysize = sizeof(AppendOnlyVisiMapDeleteData);
 	hash_ctl.hash = hash_delete_key;
 	hash_ctl.match = hash_compare_keys;
@@ -500,7 +500,7 @@ AppendOnlyVisimapDelete_Unstash(
 	AppendOnlyVisimap *visiMap;
 	uint64		len,
 				dataLen;
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 
 	Assert(visiMapDelete);
 
@@ -579,7 +579,7 @@ AppendOnlyVisimapDelete_Find(
 	AppendOnlyVisimap *visiMap;
 	uint64		firstRowNum;
 	AppendOnlyVisiMapDeleteData *r;
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 
 	Assert(visiMapDelete);
 	Assert(aoTupleId);
@@ -640,7 +640,7 @@ AppendOnlyVisimapDelete_Stash(
 {
 	AppendOnlyVisimap *visiMap;
 	AppendOnlyVisiMapDeleteData *r;
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 	MemoryContext oldContext;
 	bool		found;
 	off_t		offset;
@@ -744,7 +744,7 @@ AppendOnlyVisimapDelete_WriteBackStashedEntries(AppendOnlyVisimapDelete *visiMap
 	
 	AppendOnlyVisimap *visiMap;
 	bool		found;
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 
 	visiMap = visiMapDelete->visiMap;
 	Assert(visiMap);
@@ -877,7 +877,7 @@ AppendOnlyVisimapDelete_Finish(
 	AppendOnlyVisiMapDeleteData *deleteData;
 	AppendOnlyVisimap *visiMap;
 	bool		found;
-	AppendOnlyVisiMapDeleteKey key;
+	AppendOnlyVisiMapEntryKey key;
 
 	visiMap = visiMapDelete->visiMap;
 	Assert(visiMap);
