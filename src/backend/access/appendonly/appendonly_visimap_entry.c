@@ -450,7 +450,8 @@ AppendOnlyVisimapEntry_GetFirstRowNum(
 bool
 AppendOnlyVisimapEntry_IsVisible(
 								 AppendOnlyVisimapEntry *visiMapEntry,
-								 AOTupleId *tupleId)
+								 AOTupleId *tupleId,
+								 bool *isAllVisible)
 {
 	int64		rowNum,
 				rowNumOffset;
@@ -467,12 +468,19 @@ AppendOnlyVisimapEntry_IsVisible(
 		   "firstRowNum " INT64_FORMAT ", rowNum " INT64_FORMAT,
 		   visiMapEntry->firstRowNum, rowNum);
 
+	if (isAllVisible != NULL)
+		*isAllVisible = false;
+
 	if (AppendOnlyVisimapEntry_AreAllVisible(visiMapEntry))
 	{
 		elogif(Debug_appendonly_print_visimap, LOG,
 			   "Append-only visi map entry: All entries are visibile: "
 			   "(firstRowNum, rowNum) = (" INT64_FORMAT ", " INT64_FORMAT ")",
 			   visiMapEntry->firstRowNum, rowNum);
+
+		if (isAllVisible != NULL)
+			*isAllVisible = true;
+
 		return true;
 	}
 	Assert(rowNum >= visiMapEntry->firstRowNum);
