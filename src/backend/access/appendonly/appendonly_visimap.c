@@ -281,7 +281,7 @@ AppendOnlyVisimapCache_Delete(
  * Get the visimap cache entry specified by rangeid,
  * move it to the head of the LRU array.
  */
-static AppendOnlyVisimapRangeEntry *
+static inline AppendOnlyVisimapRangeEntry *
 AppendOnlyVisimapCache_Get(
 						   AppendOnlyVisimapCache *cache,
 						   int rangeid)
@@ -357,11 +357,6 @@ AppendOnlyVisimapCache_Find(
 
 	Assert(visiMap);
 
-	elogif(Debug_appendonly_print_visimap, LOG,
-		   "Append-only visi map: Lookup cache for "
-		   "(tupleId) = %s",
-		   AOTupleIdToString(aoTupleId));
-
 	key.segno = AOTupleIdGet_segmentFileNum(aoTupleId);
 	key.firstRowNum = APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(AOTupleIdGet_rowNum(aoTupleId));
 
@@ -380,6 +375,11 @@ AppendOnlyVisimapCache_Find(
 		MemoryContextSwitchTo(oldmctx);
 		range->rangeid = rangeid;
 	}
+
+	elogif(Debug_appendonly_print_visimap, LOG,
+		   "Append-only visi map: Lookup cache for (tupleId) = %s, "
+		   "Cache {segno = " UINT64_FORMAT ", firstrowno = " UINT64_FORMAT ", rangeid = %d, allvisible = %d}",
+		   AOTupleIdToString(aoTupleId), key.segno, key.firstRowNum, rangeid, cache->rentries[rangeid].allvisible);
 
 	return rangeid;
 }
@@ -427,7 +427,9 @@ AppendOnlyVisimap_Finish(
 
 	AppendOnlyVisimapStore_Finish(&visiMap->visimapStore, lockmode);
 	AppendOnlyVisimapEntry_Finish(&visiMap->visimapEntry);
-	AppendOnlyVisimapCache_Finish(&visiMap->visimapCache);
+
+	if (gp_aovisimap_max_cache_entries > 0)
+		AppendOnlyVisimapCache_Finish(&visiMap->visimapCache);
 
 	MemoryContextDelete(visiMap->memoryContext);
 	visiMap->memoryContext = NULL;
@@ -469,9 +471,10 @@ AppendOnlyVisimap_Init(
 								lockmode,
 								appendOnlyMetaDataSnapshot,
 								visiMap->memoryContext);
-	
-	AppendOnlyVisimapCache_Init(&visiMap->visimapCache,
-								visiMap->memoryContext);
+
+	if (gp_aovisimap_max_cache_entries > 0)
+		AppendOnlyVisimapCache_Init(&visiMap->visimapCache,
+									visiMap->memoryContext);
 
 	MemoryContextSwitchTo(oldContext);
 }
