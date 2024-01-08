@@ -51,7 +51,7 @@ typedef struct AppendOnlyVisimapRangeEntry
 	int nextfree;
 	int morerecently; /* pointing to the pre element of the LRU list */
 	int lessrecently; /* pointing to the post element of the LRU list */
-
+ 
 	bool allvisible;
 } AppendOnlyVisimapRangeEntry;
 

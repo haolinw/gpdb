@@ -195,6 +195,8 @@ AppendOnlyVisimapCache_Free(
 	rentry->allvisible = false;
 	
 	cache->rentries[0].nextfree = rangeid;
+
+	/* need to free the corresponding hash entry as well */
 }
 
 /*
@@ -343,6 +345,11 @@ AppendOnlyVisimapCache_GetNextFree(
 
 /*
  * Map the input AOTupleId to a rangeid for cache lookup.
+ * 
+ * We are assuming there is no catalog snapshot change in
+ * a scan descriptor lifecyle hence the visibility bits
+ * in cache are same as the first read of the catalog in
+ * current scan descriptor lifecycle.
  */
 static int
 AppendOnlyVisimapCache_Find(
@@ -489,6 +496,94 @@ AppendOnlyVisimap_Init(
  * Should not be called when the append-only table has no relation
  * Assumes that the visibility has been initialized and not finished.
  */
+// static void
+// AppendOnlyVisimap_Find(
+// 					   AppendOnlyVisimap *visiMap,
+// 					   AOTupleId *aoTupleId)
+// {
+// 	Assert(visiMap);
+// 	Assert(aoTupleId);
+
+// 	elogif(Debug_appendonly_print_visimap, LOG,
+// 		   "Append-only visi map: Find entry for "
+// 		   "(tupleId) = %s",
+// 		   AOTupleIdToString(aoTupleId));
+
+// 	if (!AppendOnlyVisimapStore_Find(&visiMap->visimapStore,
+// 									 AOTupleIdGet_segmentFileNum(aoTupleId),
+// 									 AppendOnlyVisimapEntry_GetFirstRowNum(
+// 																		   &visiMap->visimapEntry, aoTupleId),
+// 									 &visiMap->visimapEntry))
+// 	{
+// 		/*
+// 		 * There is no entry that covers the given tuple id.
+// 		 */
+// 		AppendOnlyVisimapEntry_New(&visiMap->visimapEntry, aoTupleId);
+// 	}
+// }
+
+// /*
+//  * Checks if a tuple is visible according to the visibility map.
+//  * A positive result is a necessary but not sufficient condition for
+//  * a tuple to be visible to the user.
+//  *
+//  * Assumes that the visibility has been initialized and not finished.
+//  */
+// bool
+// AppendOnlyVisimap_IsVisible(
+// 							AppendOnlyVisimap *visiMap,
+// 							AOTupleId *aoTupleId)
+// {
+// 	Assert(visiMap);
+
+// 	elogif(Debug_appendonly_print_visimap, LOG,
+// 		   "Append-only visi map: Visibility check: "
+// 		   "(tupleId) = %s",
+// 		   AOTupleIdToString(aoTupleId));
+
+// 	if (gp_aovisimap_max_cache_entries > 0)
+// 	{
+// 		bool isAllVisible, result;
+// 		int rangeid = AppendOnlyVisimapCache_Find(visiMap, aoTupleId);
+
+// 		if (AppendOnlyVisimapCache_RangeIsAllVisible(&visiMap->visimapCache, rangeid))
+// 			return true;
+
+// 		/* if necessary persist the current entry before moving. */
+// 		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+// 		{
+// 			AppendOnlyVisimap_Store(visiMap);
+// 		}
+
+// 		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+
+// 		result = AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
+// 												  aoTupleId,
+// 												  &isAllVisible);
+
+// 		AppendOnlyVisimapCache_Update(&visiMap->visimapCache, rangeid, isAllVisible);
+
+// 		return result;
+// 	}
+
+// 	if (!AppendOnlyVisimapEntry_CoversTuple(&visiMap->visimapEntry,
+// 											aoTupleId))
+// 	{
+// 		/* if necessary persist the current entry before moving. */
+// 		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+// 		{
+// 			AppendOnlyVisimap_Store(visiMap);
+// 		}
+
+// 		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+// 	}
+
+// 	/* visimap entry is now positioned to cover the aoTupleId */
+// 	return AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
+// 											aoTupleId,
+// 											NULL);
+// }
+
 static void
 AppendOnlyVisimap_Find(
 					   AppendOnlyVisimap *visiMap,
@@ -534,30 +629,30 @@ AppendOnlyVisimap_IsVisible(
 		   "(tupleId) = %s",
 		   AOTupleIdToString(aoTupleId));
 
-	if (gp_aovisimap_max_cache_entries > 0)
-	{
-		bool isAllVisible, result;
-		int rangeid = AppendOnlyVisimapCache_Find(visiMap, aoTupleId);
+	// if (gp_aovisimap_max_cache_entries > 0)
+	// {
+	// 	bool isAllVisible, result;
+	// 	int rangeid = AppendOnlyVisimapCache_Find(visiMap, aoTupleId);
 
-		if (AppendOnlyVisimapCache_RangeIsAllVisible(&visiMap->visimapCache, rangeid))
-			return true;
+	// 	if (AppendOnlyVisimapCache_RangeIsAllVisible(&visiMap->visimapCache, rangeid))
+	// 		return true;
 
-		/* if necessary persist the current entry before moving. */
-		if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
-		{
-			AppendOnlyVisimap_Store(visiMap);
-		}
+	// 	/* if necessary persist the current entry before moving. */
+	// 	if (AppendOnlyVisimapEntry_HasChanged(&visiMap->visimapEntry))
+	// 	{
+	// 		AppendOnlyVisimap_Store(visiMap);
+	// 	}
 
-		AppendOnlyVisimap_Find(visiMap, aoTupleId);
+	// 	AppendOnlyVisimap_Find(visiMap, aoTupleId);
 
-		result = AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
-												  aoTupleId,
-												  &isAllVisible);
+	// 	result = AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
+	// 											  aoTupleId,
+	// 											  &isAllVisible);
 
-		AppendOnlyVisimapCache_Update(&visiMap->visimapCache, rangeid, isAllVisible);
+	// 	AppendOnlyVisimapCache_Update(&visiMap->visimapCache, rangeid, isAllVisible);
 
-		return result;
-	}
+	// 	return result;
+	// }
 
 	if (!AppendOnlyVisimapEntry_CoversTuple(&visiMap->visimapEntry,
 											aoTupleId))
