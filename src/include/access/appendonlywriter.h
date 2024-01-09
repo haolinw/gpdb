@@ -177,6 +177,12 @@ typedef struct AOSegfileStatus
 	bool		aborted;
 } AOSegfileStatus;
 
+typedef struct AORelHashKey
+{
+	Oid dbid;
+	Oid relid;
+} AORelHashKey;
+
 /*
  * Describes the status of all file segments of an AO relation in the system.
  * This data structure is kept in a hash table on the master and kept up to
@@ -189,10 +195,9 @@ typedef struct AOSegfileStatus
  */
 typedef struct AORelHashEntryData
 {
-	Oid			relid;
+	AORelHashKey key;
 	int			txns_using_rel;
 	AOSegfileStatus relsegfiles[MAX_AOREL_CONCURRENCY];
-
 } AORelHashEntryData;
 typedef AORelHashEntryData *AORelHashEntry;
 
@@ -211,8 +216,8 @@ extern Size AppendOnlyWriterShmemSize(void);
 extern void InitAppendOnlyWriter(void);
 extern Size AppendOnlyWriterShmemSize(void);
 extern int	SetSegnoForWrite(Relation rel, int existingsegno);
-extern void RegisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList);
-extern void DeregisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList);
+extern void RegisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList);
+extern void DeregisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList);
 extern List *SetSegnoForCompaction(Relation rel, List *compactedSegmentFileList,
 					  List *insertedSegmentFileList, bool *isdrop);
 extern int SetSegnoForCompactionInsert(Relation rel, List *compacted_segno,
@@ -225,7 +230,7 @@ extern void UpdateMasterAosegTotals(Relation parentrel,
 extern void UpdateMasterAosegTotalsFromSegments(Relation parentrel,
 									Snapshot appendOnlyMetaDataSnapshot, List *segmentNumList,
 									int64 modcount_added);
-extern bool AORelRemoveHashEntry(Oid relid);
+extern bool AORelRemoveHashEntry(Oid dbid, Oid relid);
 extern void AtCommit_AppendOnly(void);
 extern void AtAbort_AppendOnly(void);
 extern void AtEOXact_AppendOnly(void);

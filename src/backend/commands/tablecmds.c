@@ -1960,7 +1960,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 			 * catalog the next time a write into this AO table comes along.
 			 */
 			LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
-			AORelRemoveHashEntry(RelationGetRelid(rel));
+			AORelRemoveHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
 			LWLockRelease(AOSegFileLock);
 		}
 
@@ -6344,7 +6344,7 @@ ATAocsWriteNewColumns(AlteredTableInfo *tab)
 		 * relation so we are guaranteed to not drop the hash
 		 * entry from under any concurrent operation.
 		 */
-		AORelRemoveHashEntry(RelationGetRelid(rel));
+		AORelRemoveHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
 	}
 
 	FreeExecutorState(estate);
@@ -6937,7 +6937,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 			 * entry from under any concurrent operation.
 			 */
 			LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
-			AORelRemoveHashEntry(RelationGetRelid(oldrel));
+			AORelRemoveHashEntry(oldrel->rd_node.dbNode, RelationGetRelid(oldrel));
 			LWLockRelease(AOSegFileLock);
 		}
 		else
@@ -15147,6 +15147,7 @@ ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd)
 	RangeVar			*tmprv;
 	Oid					tmprelid;
 	Oid					relid = RelationGetRelid(rel);
+	Oid					dbid = rel->rd_node.dbNode;
 	char				relstorage = rel->rd_rel->relstorage;
 	ExpandStmtSpec		*spec = (ExpandStmtSpec *)rootCmd->def;
 
@@ -15316,7 +15317,7 @@ ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd)
 		 * concurrent operation.
 		 */
 		LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
-		AORelRemoveHashEntry(relid);
+		AORelRemoveHashEntry(dbid, relid);
 		LWLockRelease(AOSegFileLock);
 	}
 }
@@ -15339,6 +15340,7 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 	RangeVar   *tmprv;
 	Oid			tmprelid;
 	Oid			tarrelid = RelationGetRelid(rel);
+	Oid			dbid = rel->rd_node.dbNode;
 	char		tarrelstorage = rel->rd_rel->relstorage;
 	bool        rand_pol = false;
 	bool        rep_pol = false;
@@ -15923,7 +15925,7 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 		 * concurrent operation.
 		 */
 		LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
-		AORelRemoveHashEntry(tarrelid);
+		AORelRemoveHashEntry(dbid, tarrelid);
 		LWLockRelease(AOSegFileLock);
 	}
 

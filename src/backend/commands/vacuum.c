@@ -957,7 +957,7 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
 					   "Skipping freeing compacted append-only segment file "
 					   "because of concurrent serializable transaction");
 
-				DeregisterSegnoForCompactionDrop(relid, compactNowList);
+				DeregisterSegnoForCompactionDrop(onerel->rd_node.dbNode, relid, compactNowList);
 				break;
 			}
 
@@ -966,7 +966,7 @@ vacuumStatement_Relation(VacuumStmt *vacstmt, Oid relid,
 				   RelationGetRelationName(onerel));
 
 			/* Perform the DROP phase */
-			RegisterSegnoForCompactionDrop(relid, compactNowList);
+			RegisterSegnoForCompactionDrop(onerel->rd_node.dbNode, relid, compactNowList);
 
 			vacuum_rel_ao_phase(onerel, relid, vacstmt, lmode, for_wraparound,
 								NIL,	/* insert segno */

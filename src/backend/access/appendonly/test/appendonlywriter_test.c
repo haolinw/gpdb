@@ -72,7 +72,7 @@ test__AppendOnlyRelHashNew_replace_unused_entry(void **state)
 	/*
 	 * TEST
 	 */
-	AORelHashEntry actual = AppendOnlyRelHashNew(0, &exists);
+	AORelHashEntry actual = AppendOnlyRelHashNew(0, 0, &exists);
 
 	/*
 	 * make sure we get our entry back
@@ -110,7 +110,7 @@ test__AppendOnlyRelHashNew_existing_entry(void **state)
 	/*
 	 * TEST
 	 */
-	AppendOnlyRelHashNew(0, &exists);
+	AppendOnlyRelHashNew(0, 0, &exists);
 
 	/*
 	 * We got existing entry
@@ -167,7 +167,7 @@ test__AppendOnlyRelHashNew_give_up(void **state)
 	/*
 	 * TEST
 	 */
-	AORelHashEntry actual = AppendOnlyRelHashNew(0, &exists);
+	AORelHashEntry actual = AppendOnlyRelHashNew(0, 0, &exists);
 
 	/*
 	 * give up, no entry created, and no existing one found

@@ -58,10 +58,10 @@ static bool appendOnlyInsertXact = false;
  * local functions
  */
 static bool AOHashTableInit(void);
-static AORelHashEntry AppendOnlyRelHashNew(Oid relid, bool *exists);
-static AORelHashEntry AORelGetHashEntry(Oid relid);
-static AORelHashEntry AORelLookupHashEntry(Oid relid);
-static bool AORelCreateHashEntry(Oid relid);
+static AORelHashEntry AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists);
+static AORelHashEntry AORelGetHashEntry(Oid dbid, Oid relid);
+static AORelHashEntry AORelLookupHashEntry(Oid dbid, Oid relid);
+static bool AORelCreateHashEntry(Oid dbid, Oid relid);
 static bool *get_awaiting_drop_status_from_segments(Relation parentrel);
 static int64 *GetTotalTupleCountFromSegments(Relation parentrel, int segno);
 
@@ -156,7 +156,7 @@ AOHashTableInit(void)
 
 	/* Set key and entry sizes. */
 	MemSet(&info, 0, sizeof(info));
-	info.keysize = sizeof(Oid);
+	info.keysize = sizeof(AORelHashKey);
 	info.entrysize = sizeof(AORelHashEntryData);
 	info.hash = tag_hash;
 	hash_flags = (HASH_ELEM | HASH_FUNCTION);
@@ -186,7 +186,7 @@ AOHashTableInit(void)
  *	calling this - unless we are the startup process.
  */
 static bool
-AORelCreateHashEntry(Oid relid)
+AORelCreateHashEntry(Oid dbid, Oid relid)
 {
 	bool		exists = false;
 	FileSegInfo **allfsinfo = NULL;
@@ -228,6 +228,12 @@ AORelCreateHashEntry(Oid relid)
 
 	awaiting_drop = get_awaiting_drop_status_from_segments(aorel);
 
+	if (dbid != aorel->rd_node.dbNode)
+	{
+		ereport(WARNING, (errmsg("Expecting dbid %d, but got %d actually.", dbid, aorel->rd_node.dbNode)));
+		dbid = aorel->rd_node.dbNode;
+	}
+
 	heap_close(aorel, RowExclusiveLock);
 
 	/*
@@ -237,7 +243,7 @@ AORelCreateHashEntry(Oid relid)
 	 */
 	acquire_lightweight_lock();
 
-	aoHashEntry = AppendOnlyRelHashNew(relid, &exists);
+	aoHashEntry = AppendOnlyRelHashNew(dbid, relid, &exists);
 
 	/* Does an entry for this relation exists already? exit early */
 	if (exists)
@@ -267,7 +273,7 @@ AORelCreateHashEntry(Oid relid)
 	}
 
 
-	Assert(aoHashEntry->relid == relid);
+	Assert(aoHashEntry->key.relid == relid);
 	aoHashEntry->txns_using_rel = 0;
 
 	/*
@@ -353,22 +359,23 @@ AORelCreateHashEntry(Oid relid)
  *	this operation.
  */
 bool
-AORelRemoveHashEntry(Oid relid)
+AORelRemoveHashEntry(Oid dbid, Oid relid)
 {
 	bool		found;
+	AORelHashKey key = {dbid, relid};
 	void	   *aoentry;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 
 	aoentry = hash_search(AppendOnlyHash,
-						  (void *) &relid,
+						  (void *) &key,
 						  HASH_REMOVE,
 						  &found);
 
 	ereportif(Debug_appendonly_print_segfile_choice, LOG,
 			  (errmsg("AORelRemoveHashEntry: Remove hash entry for inactive append-only "
-					  "relation %d (found %s)",
-					  relid,
+					  "relation %d in database %d (found %s)",
+					  relid, dbid,
 					  (aoentry != NULL ? "true" : "false"))));
 
 	if (aoentry == NULL)
@@ -384,15 +391,19 @@ AORelRemoveHashEntry(Oid relid)
  *					   it exists.
  */
 static AORelHashEntry
-AORelLookupHashEntry(Oid relid)
+AORelLookupHashEntry(Oid dbid, Oid relid)
 {
 	bool		found;
+	AORelHashKey key;
 	AORelHashEntryData *aoentry;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 
+	key.dbid = dbid;
+	key.relid = relid;
+
 	aoentry = (AORelHashEntryData *) hash_search(AppendOnlyHash,
-												 (void *) &relid,
+												 (void *) &key,
 												 HASH_FIND,
 												 &found);
 
@@ -407,9 +418,9 @@ AORelLookupHashEntry(Oid relid)
  *					an entry to exist. We error out if it doesn't.
  */
 static AORelHashEntry
-AORelGetHashEntry(Oid relid)
+AORelGetHashEntry(Oid dbid, Oid relid)
 {
-	AORelHashEntryData *aoentry = AORelLookupHashEntry(relid);
+	AORelHashEntryData *aoentry = AORelLookupHashEntry(dbid, relid);
 
 	if (!aoentry)
 		ereport(ERROR,
@@ -431,12 +442,12 @@ AORelGetHashEntry(Oid relid)
  * if it errors out.
  */
 static AORelHashEntryData *
-AORelGetOrCreateHashEntry(Oid relid)
+AORelGetOrCreateHashEntry(Oid dbid, Oid relid)
 {
 
 	AORelHashEntryData *aoentry = NULL;
 
-	aoentry = AORelLookupHashEntry(relid);
+	aoentry = AORelLookupHashEntry(dbid, relid);
 	if (aoentry != NULL)
 	{
 		return aoentry;
@@ -449,7 +460,7 @@ AORelGetOrCreateHashEntry(Oid relid)
 	 * AORelCreateHashEntry will carefully release the AOSegFileLock, gather
 	 * the information, and then re-acquire AOSegFileLock.
 	 */
-	if (!AORelCreateHashEntry(relid))
+	if (!AORelCreateHashEntry(dbid, relid))
 	{
 		release_lightweight_lock();
 		ereport(ERROR,
@@ -459,7 +470,7 @@ AORelGetOrCreateHashEntry(Oid relid)
 	}
 
 	/* get the hash entry for this relation (must exist) */
-	aoentry = AORelGetHashEntry(relid);
+	aoentry = AORelGetHashEntry(dbid, relid);
 	return aoentry;
 }
 
@@ -471,8 +482,9 @@ AORelGetOrCreateHashEntry(Oid relid)
  *	this operation.
  */
 static AORelHashEntry
-AppendOnlyRelHashNew(Oid relid, bool *exists)
+AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists)
 {
+	AORelHashKey key;
 	AORelHashEntryData *aorelentry = NULL;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
@@ -488,7 +500,7 @@ AppendOnlyRelHashNew(Oid relid, bool *exists)
 	if (AppendOnlyWriter->num_existing_aorels >= MaxAppendOnlyTables)
 	{
 		/* see if there's already an existing entry for this relid */
-		aorelentry = AORelLookupHashEntry(relid);
+		aorelentry = AORelLookupHashEntry(dbid, relid);
 
 		/*
 		 * already have an entry for this rel? reuse it. don't have? try to
@@ -517,18 +529,20 @@ AppendOnlyRelHashNew(Oid relid, bool *exists)
 				{
 					ereportif(Debug_appendonly_print_segfile_choice, LOG,
 							  (errmsg("AppendOnlyRelHashNew: Appendonly Writer removing an "
-									  "unused entry (rel %d) to make "
-									  "room for a new one (rel %d)",
-									  hentry->relid, relid)));
+									  "unused entry (dbid %d, rel %d) to make "
+									  "room for a new one (dbid %d, rel %d)",
+									  hentry->key.dbid, hentry->key.relid, dbid, relid)));
 
 					/* remove this unused entry */
 					/* TODO: remove the LRU entry, not just any unused one */
-					AORelRemoveHashEntry(hentry->relid);
+					AORelRemoveHashEntry(hentry->key.dbid, hentry->key.relid);
 					hash_seq_term(&status);
 
 					/* we now have room for a new entry, create it */
+					key.dbid = dbid;
+					key.relid = relid;
 					aorelentry = (AORelHashEntryData *) hash_search(AppendOnlyHash,
-																	(void *) &relid,
+																	(void *) &key,
 																	HASH_ENTER_NULL,
 																	exists);
 
@@ -553,8 +567,10 @@ AppendOnlyRelHashNew(Oid relid, bool *exists)
 	/*
 	 * We don't yet have a full hash table. Create a new entry if not exists
 	 */
+	key.dbid = dbid;
+	key.relid = relid;
 	aorelentry = (AORelHashEntryData *) hash_search(AppendOnlyHash,
-													(void *) &relid,
+													(void *) &key,
 													HASH_ENTER_NULL,
 													exists);
 
@@ -686,7 +702,7 @@ usedByConcurrentTransaction(AOSegfileStatus *segfilestat, int segno)
 }
 
 void
-DeregisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
+DeregisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList)
 {
 	TransactionId CurrentXid = GetTopTransactionId();
 	AORelHashEntryData *aoentry;
@@ -705,7 +721,7 @@ DeregisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(relid);
+	aoentry = AORelGetOrCreateHashEntry(dbid, relid);
 	Assert(aoentry);
 	aoentry->txns_using_rel++;
 
@@ -731,7 +747,7 @@ DeregisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 }
 
 void
-RegisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
+RegisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList)
 {
 	TransactionId CurrentXid = GetTopTransactionId();
 	AORelHashEntryData *aoentry;
@@ -750,7 +766,7 @@ RegisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(relid);
+	aoentry = AORelGetOrCreateHashEntry(dbid, relid);
 	Assert(aoentry);
 	aoentry->txns_using_rel++;
 
@@ -762,7 +778,7 @@ RegisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 		{
 			ereportif(Debug_appendonly_print_segfile_choice, LOG,
 					  (errmsg("Register segno %d for drop "
-							  "relation \"%s\" (%d)", i,
+							 "relation \"%s\" (%d)", i,
 							  get_rel_name(relid), relid)));
 
 			appendOnlyInsertXact = true;
@@ -843,7 +859,7 @@ SetSegnoForCompaction(Relation rel,
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
+	aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
 	Assert(aoentry);
 
 	/*
@@ -1004,7 +1020,7 @@ SetSegnoForCompactionInsert(Relation rel,
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
+	aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
 	Assert(aoentry);
 
 	ereportif(Debug_appendonly_print_segfile_choice, LOG,
@@ -1153,7 +1169,7 @@ SetSegnoForWrite(Relation rel, int existingsegno)
 
 			acquire_lightweight_lock();
 
-			aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
+			aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
 			Assert(aoentry);
 			ereportif(Debug_appendonly_print_segfile_choice, LOG,
 					  (errmsg("SetSegnoForWrite: got the hash entry for relation \"%s\" (%d)",
@@ -1727,7 +1743,7 @@ UpdateMasterAosegTotals(Relation parentrel, int segno, int64 tupcount, int64 mod
 	 * same trick for the aoseg table since MVCC protects us there in case we
 	 * abort.
 	 */
-	aoHashEntry = AORelGetHashEntry(RelationGetRelid(parentrel));
+	aoHashEntry = AORelGetHashEntry(parentrel->rd_node.dbNode, RelationGetRelid(parentrel));
 	aoHashEntry->relsegfiles[segno].tupsadded += tupcount;
 
 	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
@@ -1801,7 +1817,7 @@ AtCommit_AppendOnly(void)
 									  "our txn for table %d. Updating segno %d "
 									  "tupcount: old count " INT64_FORMAT ", tups "
 									  "added in this txn " INT64_FORMAT " new "
-									  "count " INT64_FORMAT, aoentry->relid, i,
+									  "count " INT64_FORMAT, aoentry->key.relid, i,
 									  (int64) segfilestat->total_tupcount,
 									  (int64) segfilestat->tupsadded,
 									  (int64) segfilestat->total_tupcount +
@@ -1890,7 +1906,7 @@ AtAbort_AppendOnly(void)
 							  "table %d. Cleaning segno %d tupcount: old "
 							  "count " INT64_FORMAT " tups added in this "
 							  "txn " INT64_FORMAT ", count "
-							  "remains " INT64_FORMAT, aoentry->relid, i,
+							  "remains " INT64_FORMAT, aoentry->key.relid, i,
 							  (int64) segfilestat->total_tupcount,
 							  (int64) segfilestat->tupsadded,
 							  (int64) segfilestat->total_tupcount)));
@@ -1975,7 +1991,7 @@ AtEOXact_AppendOnly_StateTransition(AORelHashEntry aoentry, int segno,
 	ereportif(Debug_appendonly_print_segfile_choice, LOG,
 			  (errmsg("Segment file state transition for "
 					  "table %d, segno %d: %d -> %d",
-					  aoentry->relid, segno,
+					  aoentry->key.relid, segno,
 					  oldstate, segfilestat->state)));
 	segfilestat->xid = InvalidTransactionId;
 	segfilestat->aborted = false;
@@ -2035,7 +2051,7 @@ AtEOXact_AppendOnly_Relation(AORelHashEntry aoentry, TransactionId currentXid)
 		 */
 		if (!is_entry_in_use_by_other_transactions(aoentry))
 		{
-			AORelRemoveHashEntry(aoentry->relid);
+			AORelRemoveHashEntry(aoentry->key.dbid, aoentry->key.relid);
 		}
 	}
 }
@@ -2093,7 +2109,7 @@ AtEOXact_AppendOnly(void)
 void
 GpFetchEntryFromAppendOnlyHash(Oid relid, AORelHashEntry foundAoEntry) {
 	acquire_lightweight_lock();
-	AORelHashEntry aoentry = AORelGetHashEntry(relid);
+	AORelHashEntry aoentry = AORelGetHashEntry(MyDatabaseId, relid);
 	memcpy(foundAoEntry, aoentry, sizeof(AORelHashEntryData));
 	release_lightweight_lock();
 }
@@ -2122,10 +2138,11 @@ void
 GpRemoveEntryFromAppendOnlyHash(Oid relid) {
 	bool removeWasSuccess;
 	AORelHashEntry aoentry;
+	Oid dbid = MyDatabaseId;
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetHashEntry(relid);
+	aoentry = AORelGetHashEntry(dbid, relid);
 
 	if (is_entry_in_use_by_other_transactions(aoentry)) {
 		release_lightweight_lock();
@@ -2133,7 +2150,7 @@ GpRemoveEntryFromAppendOnlyHash(Oid relid) {
 		return;
 	}
 
-	removeWasSuccess = AORelRemoveHashEntry(relid);
+	removeWasSuccess = AORelRemoveHashEntry(dbid, relid);
 
 	release_lightweight_lock();
 
