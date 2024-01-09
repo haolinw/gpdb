@@ -1,0 +1,52 @@
+--
+-- Test TRUNCATE should not remove shared AO hash entry in use by other transactions.
+--
+
+create extension if not exists gp_inject_fault;
+CREATE
+
+drop database if exists testdb0;
+DROP
+create database testdb0;
+CREATE
+1:@db_name testdb0: create table ao_insert_hash_crash_@orientation@ (a int, b int) with (appendonly=true, orientation=@orientation@);
+CREATE
+1:@db_name testdb0: insert into ao_insert_hash_crash_@orientation@ select 2, i from generate_series(1,10)i;
+INSERT 10
+1q: ... <quitting>
+drop database if exists testdb1;
+DROP
+create database testdb1 with template testdb0;
+CREATE
+
+SELECT gp_inject_fault('appendonly_insert', 'suspend', '', '', 'ao_insert_hash_crash_@orientation@', 1, 1, 0, dbid) FROM gp_segment_configuration WHERE role = 'p' AND content = 0;
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1:@db_name testdb0: begin;
+BEGIN
+1&:@db_name testdb0: insert into ao_insert_hash_crash_@orientation@ select * from ao_insert_hash_crash_@orientation@;  <waiting ...>
+
+SELECT gp_wait_until_triggered_fault('appendonly_insert', 1, dbid) FROM gp_segment_configuration WHERE role = 'p' AND content = 0;
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+(1 row)
+
+2:@db_name testdb1: truncate ao_insert_hash_crash_@orientation@;
+TRUNCATE
+
+SELECT gp_inject_fault('appendonly_insert', 'reset', dbid) FROM gp_segment_configuration WHERE role = 'p' AND content = 0;
+ gp_inject_fault 
+-----------------
+ Success:        
+(1 row)
+1<:  <... completed>
+INSERT 10
+-- Without the fix, issue would be reproduced as "ERROR:  expected an AO hash entry for relid xxxxx but found none".
+1:@db_name testdb0: end;
+END
+
+1q: ... <quitting>
+2q: ... <quitting>

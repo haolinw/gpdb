@@ -60,7 +60,6 @@ static bool appendOnlyInsertXact = false;
 static bool AOHashTableInit(void);
 static AORelHashEntry AppendOnlyRelHashNew(Oid relid, bool *exists);
 static AORelHashEntry AORelGetHashEntry(Oid relid);
-static AORelHashEntry AORelLookupHashEntry(Oid relid);
 static bool AORelCreateHashEntry(Oid relid);
 static bool *get_awaiting_drop_status_from_segments(Relation parentrel);
 static int64 *GetTotalTupleCountFromSegments(Relation parentrel, int segno);
@@ -356,14 +355,14 @@ bool
 AORelRemoveHashEntry(Oid relid)
 {
 	bool		found;
-	void	   *aoentry;
+	AORelHashEntry aoentry;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
 
-	aoentry = hash_search(AppendOnlyHash,
-						  (void *) &relid,
-						  HASH_REMOVE,
-						  &found);
+	aoentry = (AORelHashEntry) hash_search(AppendOnlyHash,
+										   (void *) &relid,
+										   HASH_REMOVE,
+										   &found);
 
 	ereportif(Debug_appendonly_print_segfile_choice, LOG,
 			  (errmsg("AORelRemoveHashEntry: Remove hash entry for inactive append-only "
@@ -374,6 +373,17 @@ AORelRemoveHashEntry(Oid relid)
 	if (aoentry == NULL)
 		return false;
 
+	if (is_entry_in_use_by_other_transactions(aoentry))
+	{
+		/*
+		 * It is supposed to be unexpected, at least report a WARNING
+		 * and LOG the stack trace for highlight the information.
+		 */
+		ereport(WARNING,
+				(errmsg("Removed hash entry for active append-only relation %d", relid),
+				errprintstack(true)));
+	}
+
 	AppendOnlyWriter->num_existing_aorels--;
 
 	return true;
@@ -383,7 +393,7 @@ AORelRemoveHashEntry(Oid relid)
  * AORelLookupEntry -- return the AO hash entry for a given AO relation,
  *					   it exists.
  */
-static AORelHashEntry
+AORelHashEntry
 AORelLookupHashEntry(Oid relid)
 {
 	bool		found;

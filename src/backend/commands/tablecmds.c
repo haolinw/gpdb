@@ -1951,6 +1951,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 
 		if (RelationIsAppendOptimized(rel) && IS_QUERY_DISPATCHER())
 		{
+			AORelHashEntryData *aoentry;
 			/*
 			 * Drop the shared memory hash table entry for this table if it
 			 * exists. We must do so since before the rewrite we probably have few
@@ -1960,7 +1961,15 @@ ExecuteTruncate(TruncateStmt *stmt)
 			 * catalog the next time a write into this AO table comes along.
 			 */
 			LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
-			AORelRemoveHashEntry(RelationGetRelid(rel));
+			aoentry = AORelLookupHashEntry(RelationGetRelid(rel));
+			if (aoentry->txns_using_rel == 0)
+				AORelRemoveHashEntry(RelationGetRelid(rel));
+			else
+				ereport(WARNING,
+						(errmsg("Cannot remove hash entry for active append-only relation %s, relid %d",
+						RelationGetRelationName(rel),
+						RelationGetRelid(rel)),
+						errprintstack(true)));
 			LWLockRelease(AOSegFileLock);
 		}
 
