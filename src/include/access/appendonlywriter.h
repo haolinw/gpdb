@@ -227,6 +227,7 @@ extern void UpdateMasterAosegTotalsFromSegments(Relation parentrel,
 									int64 modcount_added);
 extern bool AORelRemoveHashEntry(Oid relid);
 extern AORelHashEntry AORelLookupHashEntry(Oid relid);
+extern bool IsAppendOnlyInsertXact();
 extern void AtCommit_AppendOnly(void);
 extern void AtAbort_AppendOnly(void);
 extern void AtEOXact_AppendOnly(void);

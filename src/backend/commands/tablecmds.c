@@ -1962,14 +1962,22 @@ ExecuteTruncate(TruncateStmt *stmt)
 			 */
 			LWLockAcquire(AOSegFileLock, LW_EXCLUSIVE);
 			aoentry = AORelLookupHashEntry(RelationGetRelid(rel));
-			if (aoentry->txns_using_rel == 0)
-				AORelRemoveHashEntry(RelationGetRelid(rel));
-			else
-				ereport(WARNING,
-						(errmsg("Cannot remove hash entry for active append-only relation %s, relid %d",
-						RelationGetRelationName(rel),
-						RelationGetRelid(rel)),
-						errprintstack(true)));
+			if (aoentry != NULL)
+			{
+				/*
+				 * If the entry is not in-use by other transactions or
+				 * it is used only by current transaction, then remove it.
+				 */
+				if (aoentry->txns_using_rel == 0 ||
+					aoentry->txns_using_rel == 1 && IsAppendOnlyInsertXact())
+					AORelRemoveHashEntry(RelationGetRelid(rel));
+				else
+					ereport(WARNING,
+							(errmsg("Cannot remove hash entry for active append-only relation %s, relid %d",
+							RelationGetRelationName(rel),
+							RelationGetRelid(rel)),
+							errprintstack(true)));
+			}
 			LWLockRelease(AOSegFileLock);
 		}
 

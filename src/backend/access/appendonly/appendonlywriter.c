@@ -79,6 +79,12 @@ is_entry_in_use_by_other_transactions(AORelHashEntry aoentry) {
 	return aoentry->txns_using_rel != 0;
 }
 
+bool
+IsAppendOnlyInsertXact()
+{
+	return appendOnlyInsertXact;
+}
+
 /*
  * AppendOnlyWriterShmemSize -- estimate size the append only writer structures
  * will need in shared memory.
@@ -373,7 +379,8 @@ AORelRemoveHashEntry(Oid relid)
 	if (aoentry == NULL)
 		return false;
 
-	if (is_entry_in_use_by_other_transactions(aoentry))
+	if (aoentry->txns_using_rel > 1 ||
+		(aoentry->txns_using_rel == 1 && !IsAppendOnlyInsertXact())) /* exclude current insert xact */
 	{
 		/*
 		 * It is supposed to be unexpected, at least report a WARNING
