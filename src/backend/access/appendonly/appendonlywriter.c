@@ -60,6 +60,7 @@ static bool appendOnlyInsertXact = false;
 static bool AOHashTableInit(void);
 static AORelHashEntry AppendOnlyRelHashNew(Oid relid, bool *exists);
 static AORelHashEntry AORelGetHashEntry(Oid relid);
+static AORelHashEntry AORelLookupHashEntry(Oid relid);
 static bool AORelCreateHashEntry(Oid relid);
 static bool *get_awaiting_drop_status_from_segments(Relation parentrel);
 static int64 *GetTotalTupleCountFromSegments(Relation parentrel, int segno);
@@ -77,12 +78,6 @@ release_lightweight_lock() {
 static bool
 is_entry_in_use_by_other_transactions(AORelHashEntry aoentry) {
 	return aoentry->txns_using_rel != 0;
-}
-
-bool
-IsAppendOnlyInsertXact()
-{
-	return appendOnlyInsertXact;
 }
 
 /*
@@ -397,10 +392,34 @@ AORelRemoveHashEntry(Oid relid)
 }
 
 /*
+ * Check if the AO hash entry is in-use by other transactions.
+ */
+bool
+IsAORelHashEntryInUse(Oid relid)
+{
+	AORelHashEntryData *aoentry = AORelLookupHashEntry(relid);
+
+	if (aoentry != NULL && aoentry->txns_using_rel > 0)
+	{
+		/*
+		 * If it is in-use but only by current insert transaction,
+		 * return false. Otherwise, some other concurrent insert
+		 * transaction is using the entry, return true.
+		 */
+		if (aoentry->txns_using_rel == 1 && appendOnlyInsertXact)
+			return false;
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
  * AORelLookupEntry -- return the AO hash entry for a given AO relation,
  *					   it exists.
  */
-AORelHashEntry
+static AORelHashEntry
 AORelLookupHashEntry(Oid relid)
 {
 	bool		found;
