@@ -1966,7 +1966,8 @@ ExecuteTruncate(TruncateStmt *stmt)
 			{
 				/*
 				 * If the entry is not in-use by other transactions or
-				 * it is used only by current transaction, then remove it.
+				 * it is used only by current insert transaction, then
+				 * remove it.
 				 */
 				if (aoentry->txns_using_rel == 0 ||
 					aoentry->txns_using_rel == 1 && IsAppendOnlyInsertXact())

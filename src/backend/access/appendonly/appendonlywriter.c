@@ -380,7 +380,7 @@ AORelRemoveHashEntry(Oid relid)
 		return false;
 
 	if (aoentry->txns_using_rel > 1 ||
-		(aoentry->txns_using_rel == 1 && !IsAppendOnlyInsertXact())) /* exclude current insert xact */
+		(aoentry->txns_using_rel == 1 && !appendOnlyInsertXact)) /* exclude current insert xact */
 	{
 		/*
 		 * It is supposed to be unexpected, at least report a WARNING
