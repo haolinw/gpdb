@@ -1622,7 +1622,7 @@ isDtxQueryDispatcher(void)
 	isSharedLocalSnapshotSlotPresent = (SharedLocalSnapshotSlot != NULL);
 
 	return (Gp_role == GP_ROLE_DISPATCH &&
-			isDtmStarted &&
+			(isDtmStarted || EnableHotStandby) &&
 			isSharedLocalSnapshotSlotPresent);
 }
 

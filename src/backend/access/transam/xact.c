@@ -2436,7 +2436,7 @@ StartTransaction(void)
 	 * Greenplum yet.
 	 */
 	AssertImply(DistributedTransactionContext != DTX_CONTEXT_LOCAL_ONLY,
-				!s->startedInRecovery);
+				EnableHotStandby || !s->startedInRecovery);
 	/*
 	 * MPP Modification
 	 *

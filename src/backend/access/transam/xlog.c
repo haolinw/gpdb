@@ -7307,6 +7307,14 @@ StartupXLOG(void)
 								   XidFromFullTransactionId(ShmemVariableCache->nextFullXid));
 
 			/*
+			 * The hot standby will stay in the recovery loop, so initialize 
+			 * latestCompletedGxid now.
+			 */
+			LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+			ShmemVariableCache->latestCompletedGxid = ShmemVariableCache->nextGxid;
+			LWLockRelease(ProcArrayLock);
+
+			/*
 			 * If we're beginning at a shutdown checkpoint, we know that
 			 * nothing was running on the primary at this point. So fake-up an
 			 * empty running-xacts record and use that here and now. Recover
