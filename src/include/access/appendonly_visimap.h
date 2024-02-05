@@ -45,6 +45,42 @@
 #define APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(rownum) \
 	((rownum) & ~(APPENDONLY_VISIMAP_MAX_RANGE - 1))
 
+/*
+ * Key structure for the visimap entry hash table.
+ */
+typedef struct AppendOnlyVisiMapEntryKey
+{
+	/*
+	 * Segno of the dirty visimap entry.
+	 *
+	 * MPP-23546: Changed the type of segno from int to uint64.  With uint
+	 * (4-bytes), additional 4-bytes were being used for padding. The padding
+	 * bits may differ for two keys causing two otherwise equal objects to be
+	 * treated as unequal by hash functions. Keeping type to uint64 does not
+	 * change the value of sizeof(AppendOnlyVisiMapEntryKey) but eliminates
+	 * padding.
+	 */
+	uint64		segno;
+
+	/*
+	 * First row num of the dirty visimap entry.
+	 */
+	uint64		firstRowNum;
+} AppendOnlyVisiMapEntryKey;
+
+typedef struct AppendOnlyVisimapRangeData
+{
+	/*
+	 * Key of the visimap cache entry
+	 */
+	AppendOnlyVisiMapEntryKey key;
+
+	/*
+	 * Index of the visimap cache LRU array
+	 */
+	int rangeid;
+} AppendOnlyVisimapRangeData;
+
 typedef struct AppendOnlyVisimapRangeEntry
 {
 	int status;
@@ -61,6 +97,7 @@ typedef struct AppendOnlyVisimapCache
 	AppendOnlyVisimapRangeEntry *rentries;
 	int nentries;
 	MemoryContext mctx;
+	AppendOnlyVisimapRangeData lastrange;
 } AppendOnlyVisimapCache;
 
 /*

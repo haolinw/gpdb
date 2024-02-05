@@ -25,29 +25,6 @@
 #include "utils/snapmgr.h"
 
 /*
- * Key structure for the visimap entry hash table.
- */
-typedef struct AppendOnlyVisiMapEntryKey
-{
-	/*
-	 * Segno of the dirty visimap entry.
-	 *
-	 * MPP-23546: Changed the type of segno from int to uint64.  With uint
-	 * (4-bytes), additional 4-bytes were being used for padding. The padding
-	 * bits may differ for two keys causing two otherwise equal objects to be
-	 * treated as unequal by hash functions. Keeping type to uint64 does not
-	 * change the value of sizeof(AppendOnlyVisiMapEntryKey) but eliminates
-	 * padding.
-	 */
-	uint64		segno;
-
-	/*
-	 * First row num of the dirty visimap entry.
-	 */
-	uint64		firstRowNum;
-} AppendOnlyVisiMapEntryKey;
-
-/*
  * Key/Value structure for the visimap deletion hash table.
  */
 typedef struct AppendOnlyVisiMapDeleteData
@@ -69,19 +46,6 @@ typedef struct AppendOnlyVisiMapDeleteData
 	 */
 	ItemPointerData tupleTid;
 } AppendOnlyVisiMapDeleteData;
-
-typedef struct AppendOnlyVisimapRangeData
-{
-	/*
-	 * Key of the visimap cache entry
-	 */
-	AppendOnlyVisiMapEntryKey key;
-
-	/*
-	 * Index of the visimap cache LRU array
-	 */
-	int rangeid;
-} AppendOnlyVisimapRangeData;
 
 
 static void AppendOnlyVisimap_Store(
@@ -213,6 +177,9 @@ AppendOnlyVisimapCache_Init(
 	cache->mctx = mctx;
 	cache->rentries = NULL;
 	cache->nentries = 0;
+	cache->lastrange.key.segno = InvalidFileSegNumber;
+	cache->lastrange.key.firstRowNum = InvalidAORowNum;
+	cache->lastrange.rangeid = 0;
 	(void) AppendOnlyVisimapCache_Alloc(cache);
 
 	MemSet(&hctl, 0, sizeof(hctl));
@@ -244,6 +211,9 @@ AppendOnlyVisimapCache_Finish(
 
 	cache->nentries = 0;
 	cache->mctx = NULL;
+	cache->lastrange.key.segno = InvalidFileSegNumber;
+	cache->lastrange.key.firstRowNum = InvalidAORowNum;
+	cache->lastrange.rangeid = 0;
 }
 
 /*
@@ -363,23 +333,32 @@ AppendOnlyVisimapCache_Find(
 	int rangeid = 0;
 
 	Assert(visiMap);
-
-	key.segno = AOTupleIdGet_segmentFileNum(aoTupleId);
-	key.firstRowNum = APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(AOTupleIdGet_rowNum(aoTupleId));
+	cache = &visiMap->visimapCache;
 
 	/* calculate a hash key {segno, firstrowno} based on aoTupleId */
-	cache = &visiMap->visimapCache;
-	range = (AppendOnlyVisimapRangeData *)hash_search(cache->rangetab, (void *) &key, HASH_ENTER, &found);
-	if (found)
-	{
-		rangeid = range->rangeid;
-		Assert(rangeid > 0 && rangeid <= cache->nentries);
-	}
+	key.segno = AOTupleIdGet_segmentFileNum(aoTupleId);
+	key.firstRowNum = APPENDONLY_VISIMAP_RANGE_FIRSTROWNO(AOTupleIdGet_rowNum(aoTupleId));
+	/* same as lastrange? */
+	if (key.segno == cache->lastrange.key.segno &&
+		key.firstRowNum == cache->lastrange.key.firstRowNum)
+		rangeid = cache->lastrange.rangeid;
 	else
 	{
-		rangeid = AppendOnlyVisimapCache_GetNextFree(cache);
-		range->rangeid = rangeid;
+		range = (AppendOnlyVisimapRangeData *)hash_search(cache->rangetab, (void *) &key, HASH_ENTER, &found);
+		if (found)
+			rangeid = range->rangeid;
+		else
+		{
+			rangeid = AppendOnlyVisimapCache_GetNextFree(cache);
+			range->rangeid = rangeid;
+		}
+
+		/* stores to lastrange for subsequent lookups */
+		cache->lastrange.key = key;
+		cache->lastrange.rangeid = rangeid;
 	}
+
+	Assert(rangeid > 0 && rangeid <= cache->nentries);
 
 	elogif(Debug_appendonly_print_visimap, LOG,
 		   "Append-only visi map: Lookup cache for (tupleId) = %s, "
