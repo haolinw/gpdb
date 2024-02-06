@@ -83,12 +83,15 @@ typedef struct AppendOnlyVisimapRangeData
 
 typedef struct AppendOnlyVisimapRangeEntry
 {
-	int status;
+	bool inlru; /* in LRU or not */
+
 	int nextfree;
 	int morerecently; /* pointing to the pre element of the LRU list */
 	int lessrecently; /* pointing to the post element of the LRU list */
 
 	bool allvisible;
+	int segno;
+	uint64 firstrowno;
 } AppendOnlyVisimapRangeEntry;
 
 typedef struct AppendOnlyVisimapCache

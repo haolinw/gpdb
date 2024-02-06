@@ -107,7 +107,9 @@ AppendOnlyVisimapCache_Alloc(
 		newsize = 1;
 		rentries = (AppendOnlyVisimapRangeEntry *) palloc0(sizeof(AppendOnlyVisimapRangeEntry) * (newsize + 1));
 		/* rentries[0] is reserved for special usage */
-		rentries[0].status = -1;
+		rentries[0].inlru = false;
+		rentries[0].segno = InvalidFileSegNumber;
+		rentries[0].firstrowno = InvalidAORowNum;
 		rentries[0].nextfree = 1;
 		rentries[0].morerecently = 1;
 		rentries[0].lessrecently = 1;
@@ -127,7 +129,9 @@ AppendOnlyVisimapCache_Alloc(
 
 	for (int i = oldsize + 1; i <= newsize; i++)
 	{
-		rentries[i].status = -1;
+		rentries[i].inlru = false;
+		rentries[i].segno = InvalidFileSegNumber;
+		rentries[i].firstrowno = InvalidAORowNum;
 		rentries[i].nextfree = i + 1;
 		rentries[i].morerecently = 0;
 		rentries[i].lessrecently = 0;
@@ -151,14 +155,28 @@ AppendOnlyVisimapCache_Free(
 							AppendOnlyVisimapCache *cache, int rangeid)
 {
 	AppendOnlyVisimapRangeEntry *rentry = &cache->rentries[rangeid];
+	AppendOnlyVisiMapEntryKey key;
+	AppendOnlyVisimapRangeData *hentry;
 
-	rentry->status = -1;
+	key.segno = rentry->segno;
+	key.firstRowNum = rentry->firstrowno;
+
+	rentry->inlru = false;
+	rentry->segno = InvalidFileSegNumber;
+	rentry->firstrowno = InvalidAORowNum;
 	rentry->nextfree = cache->rentries[0].nextfree;
 	rentry->morerecently = 0;
 	rentry->lessrecently = 0;
 	rentry->allvisible = false;
 	
 	cache->rentries[0].nextfree = rangeid;
+
+	/* need to remove the corresponding hash entry as well */
+	hentry = (AppendOnlyVisimapRangeData *)hash_search(cache->rangetab, (void *) &key, HASH_REMOVE, NULL);
+	if (hentry == NULL)
+		elog(ERROR, 
+			 "AppendonlyVisimapCache hash table corrupted at key {" UINT64_FORMAT ", " UINT64_FORMAT "}",
+			 key.segno, key.firstRowNum);
 }
 
 /*
@@ -188,7 +206,8 @@ AppendOnlyVisimapCache_Init(
 	hctl.hash = hash_entry_key;
 	hctl.match = hash_compare_keys;
 	hctl.hcxt = cache->mctx;
-	cache->rangetab = hash_create("VisimapRangeCache", 4, &hctl, HASH_ELEM | HASH_FUNCTION | HASH_COMPARE);
+	cache->rangetab = hash_create("VisimapRangeCache", gp_aovisimap_max_cache_entries, &hctl,
+								  HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_CONTEXT);
 }
 
 /*
@@ -226,7 +245,7 @@ AppendOnlyVisimapCache_Insert(
 {
 	AppendOnlyVisimapRangeEntry *rentry = &cache->rentries[rangeid];
 
-	rentry->status = 0;
+	rentry->inlru = true;
 	rentry->morerecently = 0;
 	rentry->lessrecently = cache->rentries[0].lessrecently;
 	cache->rentries[0].lessrecently = rangeid;
@@ -243,6 +262,7 @@ AppendOnlyVisimapCache_Delete(
 {
 	AppendOnlyVisimapRangeEntry *rentry = &cache->rentries[rangeid];
 
+	rentry->inlru = false;
 	cache->rentries[rentry->lessrecently].morerecently = rentry->morerecently;
 	cache->rentries[rentry->morerecently].lessrecently = rentry->lessrecently;
 }
@@ -260,7 +280,7 @@ AppendOnlyVisimapCache_Get(
 
 	AppendOnlyVisimapRangeEntry *rentry = &cache->rentries[rangeid];
 
-	if (rentry->status < 0)
+	if (!rentry->inlru)
 	{
 		/* a free entry, insert it to the head of LRU */
 		Assert(!rentry->allvisible);
@@ -351,6 +371,8 @@ AppendOnlyVisimapCache_Find(
 		{
 			rangeid = AppendOnlyVisimapCache_GetNextFree(cache);
 			range->rangeid = rangeid;
+			cache->rentries[rangeid].segno = (int)key.segno; /* safe as segno is not greater than 128 */
+			cache->rentries[rangeid].firstrowno = key.firstRowNum;
 		}
 
 		/* stores to lastrange for subsequent lookups */
@@ -359,6 +381,8 @@ AppendOnlyVisimapCache_Find(
 	}
 
 	Assert(rangeid > 0 && rangeid <= cache->nentries);
+	Assert(cache->rentries[rangeid].segno == key.segno);
+	Assert(cache->rentries[rangeid].firstrowno == key.firstRowNum);
 
 	elogif(Debug_appendonly_print_visimap, LOG,
 		   "Append-only visi map: Lookup cache for (tupleId) = %s, "
