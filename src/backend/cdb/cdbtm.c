@@ -264,6 +264,19 @@ currentDtxActivate(void)
 {
 	bool signal_dtx_recovery;
 
+	/*
+	 * A hot standby does not have a valid gxid, so can skip most of the
+	 * things in this function.
+	 */
+	if (IS_HOT_STANDBY_QD())
+	{
+		/* XXX: do we need sessionId? */
+		MyTmGxact->sessionId = gp_session_id;
+		/* standby QD still sets the active dtx state so we don't blow up asserts elsewhere. */
+		setCurrentDtxState(DTX_STATE_ACTIVE_DISTRIBUTED);
+		return;
+	}
+
 	if (ShmemVariableCache->GxidCount <= GXID_PRETCH_THRESHOLD &&
 		(GetDtxRecoveryEvent() & DTX_RECOVERY_EVENT_BUMP_GXID) == 0)
 	{
