@@ -996,6 +996,9 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		goto out;
 	}
 
+	if (ds->curblk != ds->expblk)
+		ereport(WARNING, (errmsg("[aocs_gettuple_column] unexpected behavior: curblk = %d, expblk = %d, attno = %d, endrow = %ld", ds->curblk, ds->expblk, attno, endrow), errprintstack(true)));
+
 	/* rowNumInBlock = rowNum - blockFirstRowNum */
 	datumstreamread_find(ds, rownum - ds->blockFirstRowNum);
 
@@ -1021,6 +1024,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	int64 rowcount = -1;
 	int64 rowstoprocess;
 	bool chkvisimap = true;
+	int expblk = -1;
 
 	Assert(scan->cur_seg >= 0);
 	Assert(slot != NULL);
@@ -1036,8 +1040,17 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
 		int64 startrow = scan->segfirstrow + scan->segrowsprocessed;
 
+		Assert(ds->curblk >= 0);
+		if (i == 0)
+			expblk = ds->expblk;
+		Assert(expblk >= 0);
+
 		if (ds->blockRowCount <= 0)
+		{
 			; /* haven't read block */
+			Assert(ds->curblk == 0);
+			Assert(ds->expblk == 0);
+		}
 		else
 		{
 			/* block was read */
@@ -1046,6 +1059,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 			if (startrow + rowcount - 1 >= targrow)
 			{
+				ds->expblk = expblk;
 				if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
 				{
 					ret = false;
@@ -1086,6 +1100,14 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				{
 					/* read a new buffer to consume */
 					datumstreamread_block_content(ds);
+
+					if (i == 0)
+						expblk++;
+						
+					if (ds->expblk < ds->curblk)
+						ds->expblk = ds->curblk;
+					else
+						ds->expblk = expblk;
 
 					if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
 					{

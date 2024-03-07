@@ -1279,6 +1279,8 @@ datumstreamread_block_content(DatumStreamRead * acc)
 	 * Unpack the information from the block headers and get ready to read the first datum.
 	 */
 	datumstreamread_block_get_ready(acc);
+
+	acc->curblk++;
 }
 
 

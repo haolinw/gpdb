@@ -167,6 +167,9 @@ typedef struct DatumStreamRead
 	/* AO Storage */
 	bool		need_close_file;
 
+	int			curblk;
+	int			expblk;
+
 }	DatumStreamRead;
 
 /*
