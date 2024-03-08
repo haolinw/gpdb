@@ -998,7 +998,6 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	int segno = scan->seginfo[scan->cur_seg]->segno;
 	ItemPointerData fake_ctid;
 	AOTupleId *aotid = (AOTupleId *) &fake_ctid;
-	bool ret = true;
 	int64 rowstoprocess, nrows, rownum;
 	Datum *values;
 	bool *nulls;
@@ -1022,9 +1021,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		if (slot != NULL)
 			ExecClearTuple(slot);
 
-		ret = false;
-		/* must update tracking vars before return */
-		goto out;
+		return false;
 	}
 
 	/* rowNumInBlock = rowNum - blockFirstRowNum */
@@ -1035,11 +1032,10 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 
 	datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
 
-out:
 	/* update rows processed */
 	ds->blockRowsProcessed += rowstoprocess;
 
-	return ret;
+	return true;
 }
 
 /*
@@ -1048,7 +1044,6 @@ out:
 static bool
 aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
-	bool ret = true;
 	int64 rowcount = InvalidAORowNum;
 	int64 rowstoprocess;
 	bool chkvisimap = true;
@@ -1078,7 +1073,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 			if (startrow + rowcount - 1 >= targrow)
 			{
 				if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
-					ret = false;
+					return false;
 
 				chkvisimap = false;
 				/* haven't finished scanning on current block */
@@ -1123,7 +1118,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 												blocksRead);
 
 					if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
-						ret = false;
+						return false;
 
 					chkvisimap = false;
 					/* done this column */
@@ -1142,14 +1137,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	/* update rows processed */
 	scan->segrowsprocessed = rowstoprocess;
 
-	if (ret)
-	{
-		ExecStoreVirtualTuple(slot);
+	ExecStoreVirtualTuple(slot);
+	pgstat_count_heap_getnext(scan->rs_base.rs_rd);
 
-		pgstat_count_heap_getnext(scan->rs_base.rs_rd);
-	}
-
-	return ret;
+	return true;
 }
 
 /*
