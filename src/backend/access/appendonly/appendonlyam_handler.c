@@ -1524,7 +1524,7 @@ appendonly_acquire_sample_rows(Relation onerel, int elevel, HeapTuple *rows,
 
 	/* Prepare for sampling row numbers */
 	RowSamplerData rs;
-	RowSampler_Init(&rs, *totalrows, targrows, random());
+	RowSampler_Init(&rs, totaltupcount, targrows, random());
 
 	while (RowSampler_HasMore(&rs))
 	{
