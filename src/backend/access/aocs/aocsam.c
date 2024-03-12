@@ -1060,7 +1060,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 	{
 		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
-		int64 startrow = scan->segfirstrow + scan->segrowsprocessed;
+		int64 startrow = scan->segfirstrow + ds->dsRowsProcessed;
 
 		if (ds->blockRowCount <= 0)
 			; /* haven't read block */
@@ -1076,11 +1076,15 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 					return false;
 
 				chkvisimap = false;
+				ds->dsRowsProcessed++;
 				/* haven't finished scanning on current block */
 				continue;
 			}
 			else
+			{
 				startrow += rowcount; /* skip scanning remaining rows */
+				ds->dsRowsProcessed += rowcount;
+			}
 		}
 
 		/*
@@ -1121,11 +1125,13 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 						return false;
 
 					chkvisimap = false;
+					ds->dsRowsProcessed++;
 					/* done this column */
 					break;
 				}
 
 				startrow += rowcount;
+				ds->dsRowsProcessed += rowcount;
 				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
 				/* continue next block */
 			}
@@ -1133,9 +1139,6 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				pg_unreachable(); /* unreachable code */
 		}
 	}
-
-	/* update rows processed */
-	scan->segrowsprocessed = rowstoprocess;
 
 	ExecStoreVirtualTuple(slot);
 	pgstat_count_heap_getnext(scan->rs_base.rs_rd);
