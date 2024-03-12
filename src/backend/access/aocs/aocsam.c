@@ -964,18 +964,11 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 		close_cur_scan_seg(scan);
 		/* adjust cur_seg to fit for open_next_scan_seg() */
 		scan->cur_seg = segidx - 1;
-		if (open_next_scan_seg(scan) >= 0)
-		{
-			/* new segment, make sure segrowsprocessed was reset */
-			Assert(scan->segrowsprocessed == 0);
-		}
-		else
-		{
+		if (open_next_scan_seg(scan) < 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
 							segno, RelationGetRelationName(scan->rs_base.rs_rd))));
-		}
 	}
 	
 	return segno;
@@ -1076,7 +1069,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 					return false;
 
 				chkvisimap = false;
-				ds->dsRowsProcessed++;
+				ds->dsRowsProcessed += (targrow - startrow + 1);
 				/* haven't finished scanning on current block */
 				continue;
 			}
@@ -1094,10 +1087,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		while (true)
 		{
 			elog(DEBUG2, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
-				 "startrow: %ld, rowcount: %ld, segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, "
+				 "startrow: %ld, rowcount: %ld, segfirstrow: %ld, dsRowsProcessed: %ld, nth: %d, "
 				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				 startrow + rowcount - 1 - targrow, startrow, rowcount, scan->segfirstrow,
-				 scan->segrowsprocessed, datumstreamread_nth(ds), ds->blockRowCount,
+				 ds->dsRowsProcessed, datumstreamread_nth(ds), ds->blockRowCount,
 				 ds->blockRowsProcessed);
 
 			if (datumstreamread_block_info(ds))
@@ -1125,7 +1118,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 						return false;
 
 					chkvisimap = false;
-					ds->dsRowsProcessed++;
+					ds->dsRowsProcessed += (targrow - startrow + 1);
 					/* done this column */
 					break;
 				}
