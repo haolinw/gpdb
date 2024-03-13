@@ -891,7 +891,7 @@ aocs_blkdirscan_get_target_tuple(AOCSScanDesc scan, int64 targrow, TupleTableSlo
 										targrow,
 										&rowsprocessed);
 
-		elog(DEBUG2, "AOBlkDirScan_GetRowNum(segno: %d, col: %d, targrow: %ld): "
+		elogif(Debug_appendonly_print_datumstream, LOG, "AOBlkDirScan_GetRowNum(segno: %d, col: %d, targrow: %ld): "
 			 "[segfirstrow: %ld, segrowsprocessed: %ld, rownum: %ld, cached_entry_no: %d]",
 			 segno, col, targrow, scan->segfirstrow, scan->segrowsprocessed, rownum,
 			 blkdir->minipages[col].cached_entry_no);
@@ -1086,7 +1086,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		 */
 		while (true)
 		{
-			elog(DEBUG2, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
+			elogif(Debug_appendonly_print_datumstream, LOG, "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
 				 "startrow: %ld, rowcount: %ld, segfirstrow: %ld, dsRowsProcessed: %ld, nth: %d, "
 				 "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				 startrow + rowcount - 1 - targrow, startrow, rowcount, scan->segfirstrow,
