@@ -965,18 +965,11 @@ aocs_getsegment(AOCSScanDesc scan, int64 targrow)
 		close_cur_scan_seg(scan);
 		/* adjust cur_seg to fit for open_next_scan_seg() */
 		scan->cur_seg = segidx - 1;
-		if (open_next_scan_seg(scan) >= 0)
-		{
-			/* new segment, make sure segrowsprocessed was reset */
-			Assert(scan->segrowsprocessed == 0);
-		}
-		else
-		{
+		if (open_next_scan_seg(scan) < 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("Unexpected behavior, failed to open segno %d during scanning AOCO table %s",
 							segno, RelationGetRelationName(scan->rs_base.rs_rd))));
-		}
 	}
 	
 	return segno;
@@ -999,7 +992,6 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	int segno = scan->seginfo[scan->cur_seg]->segno;
 	ItemPointerData fake_ctid;
 	AOTupleId *aotid = (AOTupleId *) &fake_ctid;
-	bool ret = true;
 	int64 rowstoprocess, nrows, rownum;
 	Datum *values;
 	bool *nulls;
@@ -1023,9 +1015,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		if (slot != NULL)
 			ExecClearTuple(slot);
 
-		ret = false;
-		/* must update tracking vars before return */
-		goto out;
+		return false;
 	}
 
 	/* rowNumInBlock = rowNum - blockFirstRowNum */
@@ -1036,11 +1026,10 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 
 	datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
 
-out:
 	/* update rows processed */
 	ds->blockRowsProcessed += rowstoprocess;
 
-	return ret;
+	return true;
 }
 
 /*
@@ -1049,9 +1038,7 @@ out:
 static bool
 aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 {
-	bool ret = true;
 	int64 rowcount = InvalidAORowNum;
-	int64 rowstoprocess;
 	bool chkvisimap = true;
 
 	Assert(scan->cur_seg >= 0);
@@ -1059,14 +1046,12 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 	ExecClearTuple(slot);
 
-	rowstoprocess = targrow - scan->segfirstrow + 1;
-
 	/* read from scan->cur_seg */
 	for (AttrNumber i = 0; i < scan->columnScanInfo.num_proj_atts; i++)
 	{
 		AttrNumber attno = scan->columnScanInfo.proj_atts[i];
 		DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
-		int64 startrow = scan->segfirstrow + scan->segrowsprocessed;
+		int64 startrow = scan->segfirstrow + ds->dsRowsProcessed;
 
 		if (ds->blockRowCount <= 0)
 			; /* haven't read block */
@@ -1079,14 +1064,18 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 			if (startrow + rowcount - 1 >= targrow)
 			{
 				if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
-					ret = false;
+					return false;
 
 				chkvisimap = false;
+				ds->dsRowsProcessed += (targrow - startrow + 1);
 				/* haven't finished scanning on current block */
 				continue;
 			}
 			else
+			{
 				startrow += rowcount; /* skip scanning remaining rows */
+				ds->dsRowsProcessed += rowcount;
+			}
 		}
 
 		/*
@@ -1097,10 +1086,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		{
 			elogif(Debug_appendonly_print_datumstream, LOG,
 				   "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
-				   "startrow: %ld, rowcount: %ld, segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, "
+				   "startrow: %ld, rowcount: %ld, segfirstrow: %ld, dsRowsProcessed: %ld, nth: %d, "
 				   "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
 				   startrow + rowcount - 1 - targrow, startrow, rowcount, scan->segfirstrow,
-				   scan->segrowsprocessed, datumstreamread_nth(ds), ds->blockRowCount,
+				   ds->dsRowsProcessed, datumstreamread_nth(ds), ds->blockRowCount,
 				   ds->blockRowsProcessed);
 
 			if (datumstreamread_block_info(ds))
@@ -1125,14 +1114,16 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 												blocksRead);
 
 					if (!aocs_gettuple_column(scan, attno, startrow, targrow, chkvisimap, slot))
-						ret = false;
+						return false;
 
 					chkvisimap = false;
+					ds->dsRowsProcessed += (targrow - startrow + 1);
 					/* done this column */
 					break;
 				}
 
 				startrow += rowcount;
+				ds->dsRowsProcessed += rowcount;
 				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
 				/* continue next block */
 			}
@@ -1141,17 +1132,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		}
 	}
 
-	/* update rows processed */
-	scan->segrowsprocessed = rowstoprocess;
+	ExecStoreVirtualTuple(slot);
+	pgstat_count_heap_getnext(scan->rs_base.rs_rd);
 
-	if (ret)
-	{
-		ExecStoreVirtualTuple(slot);
-
-		pgstat_count_heap_getnext(scan->rs_base.rs_rd);
-	}
-
-	return ret;
+	return true;
 }
 
 /*
