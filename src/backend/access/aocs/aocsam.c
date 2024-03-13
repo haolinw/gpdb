@@ -992,6 +992,7 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	int segno = scan->seginfo[scan->cur_seg]->segno;
 	ItemPointerData fake_ctid;
 	AOTupleId *aotid = (AOTupleId *) &fake_ctid;
+	bool ret = true;
 	int64 rowstoprocess, nrows, rownum;
 	Datum *values;
 	bool *nulls;
@@ -1015,7 +1016,8 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		if (slot != NULL)
 			ExecClearTuple(slot);
 
-		return false;
+		ret = false;
+		goto out;
 	}
 
 	/* rowNumInBlock = rowNum - blockFirstRowNum */
@@ -1029,7 +1031,14 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 	/* update rows processed */
 	ds->blockRowsProcessed += rowstoprocess;
 
-	return true;
+out:
+	elogif(Debug_appendonly_print_datumstream, LOG,
+		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, rownum: %ld, "
+		   "dsRowsProcessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d, ret: %d]",
+		   attno, endrow, startrow, segno, rownum, ds->dsRowsProcessed, datumstreamread_nth(ds),
+		   ds->blockRowCount, ds->blockRowsProcessed, (int)ret);
+
+	return ret;
 }
 
 /*
@@ -1083,14 +1092,12 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 		 * the target row.
 		 */
 		while (true)
-		{
+		{	
 			elogif(Debug_appendonly_print_datumstream, LOG,
-				   "aocs_gettuple(): [targrow: %ld, currow: %ld, diff: %ld, "
-				   "startrow: %ld, rowcount: %ld, segfirstrow: %ld, dsRowsProcessed: %ld, nth: %d, "
-				   "blockRowCount: %d, blockRowsProcessed: %d]", targrow, startrow + rowcount - 1,
-				   startrow + rowcount - 1 - targrow, startrow, rowcount, scan->segfirstrow,
-				   ds->dsRowsProcessed, datumstreamread_nth(ds), ds->blockRowCount,
-				   ds->blockRowsProcessed);
+				   "aocs_gettuple(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, segfirstrow: %ld, "
+				   "dsRowsProcessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+				   attno, targrow, startrow, scan->seginfo[scan->cur_seg]->segno, scan->segfirstrow,
+				   ds->dsRowsProcessed, datumstreamread_nth(ds), ds->blockRowCount, ds->blockRowsProcessed);
 
 			if (datumstreamread_block_info(ds))
 			{
