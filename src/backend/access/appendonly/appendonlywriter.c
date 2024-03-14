@@ -184,6 +184,9 @@ AOHashTableInit(void)
  * Notes:
  *	It is expected that the appropriate lightweight lock is held before
  *	calling this - unless we are the startup process.
+ *
+ * Callers should ensure the input `dbid` should be same as `dbNode` of
+ * the relation `relid`.
  */
 static bool
 AORelCreateHashEntry(Oid dbid, Oid relid)
@@ -228,11 +231,8 @@ AORelCreateHashEntry(Oid dbid, Oid relid)
 
 	awaiting_drop = get_awaiting_drop_status_from_segments(aorel);
 
-	if (dbid != aorel->rd_node.dbNode)
-	{
-		ereport(WARNING, (errmsg("Expecting dbid %d, but got %d actually.", dbid, aorel->rd_node.dbNode)));
-		dbid = aorel->rd_node.dbNode;
-	}
+	/* Make sure the given dbid is same as the relation's dbNode. */
+	Assert(dbid == aorel->rd_node.dbNode);
 
 	heap_close(aorel, RowExclusiveLock);
 
