@@ -233,6 +233,7 @@ AORelCreateHashEntry(Oid dbid, Oid relid)
 
 	/* Make sure the given dbid is same as the relation's dbNode. */
 	Assert(dbid == aorel->rd_node.dbNode);
+	Assert(dbid == MyDatabaseId);
 
 	heap_close(aorel, RowExclusiveLock);
 
@@ -398,6 +399,7 @@ AORelLookupHashEntry(Oid dbid, Oid relid)
 	AORelHashEntryData *aoentry;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
+	Assert(dbid == MyDatabaseId);
 
 	key.dbid = dbid;
 	key.relid = relid;
@@ -488,6 +490,7 @@ AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists)
 	AORelHashEntryData *aorelentry = NULL;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
+	AssertImply(dbid != InvalidDbid, dbid == MyDatabaseId);
 
 	/*
 	 * We do not want to exceed the max number of allowed entries since we
