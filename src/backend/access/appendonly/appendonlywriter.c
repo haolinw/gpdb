@@ -58,10 +58,10 @@ static bool appendOnlyInsertXact = false;
  * local functions
  */
 static bool AOHashTableInit(void);
-static AORelHashEntry AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists);
-static AORelHashEntry AORelGetHashEntry(Oid dbid, Oid relid);
-static AORelHashEntry AORelLookupHashEntry(Oid dbid, Oid relid);
-static bool AORelCreateHashEntry(Oid dbid, Oid relid);
+static AORelHashEntry AppendOnlyRelHashNew(Oid relid, bool *exists);
+static AORelHashEntry AORelGetHashEntry(Oid relid);
+static AORelHashEntry AORelLookupHashEntry(Oid relid);
+static bool AORelCreateHashEntry(Oid relid);
 static bool *get_awaiting_drop_status_from_segments(Relation parentrel);
 static int64 *GetTotalTupleCountFromSegments(Relation parentrel, int segno);
 
@@ -189,7 +189,7 @@ AOHashTableInit(void)
  * the relation `relid`.
  */
 static bool
-AORelCreateHashEntry(Oid dbid, Oid relid)
+AORelCreateHashEntry(Oid relid)
 {
 	bool		exists = false;
 	FileSegInfo **allfsinfo = NULL;
@@ -231,10 +231,6 @@ AORelCreateHashEntry(Oid dbid, Oid relid)
 
 	awaiting_drop = get_awaiting_drop_status_from_segments(aorel);
 
-	/* Make sure the given dbid is same as the relation's dbNode. */
-	Assert(dbid == aorel->rd_node.dbNode);
-	Assert(dbid == MyDatabaseId);
-
 	heap_close(aorel, RowExclusiveLock);
 
 	/*
@@ -244,7 +240,7 @@ AORelCreateHashEntry(Oid dbid, Oid relid)
 	 */
 	acquire_lightweight_lock();
 
-	aoHashEntry = AppendOnlyRelHashNew(dbid, relid, &exists);
+	aoHashEntry = AppendOnlyRelHashNew(relid, &exists);
 
 	/* Does an entry for this relation exists already? exit early */
 	if (exists)
@@ -392,16 +388,15 @@ AORelRemoveHashEntry(Oid dbid, Oid relid)
  *					   it exists.
  */
 static AORelHashEntry
-AORelLookupHashEntry(Oid dbid, Oid relid)
+AORelLookupHashEntry(Oid relid)
 {
 	bool		found;
 	AORelHashKey key;
 	AORelHashEntryData *aoentry;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
-	Assert(dbid == MyDatabaseId);
 
-	key.dbid = dbid;
+	key.dbid = MyDatabaseId;
 	key.relid = relid;
 
 	aoentry = (AORelHashEntryData *) hash_search(AppendOnlyHash,
@@ -420,9 +415,9 @@ AORelLookupHashEntry(Oid dbid, Oid relid)
  *					an entry to exist. We error out if it doesn't.
  */
 static AORelHashEntry
-AORelGetHashEntry(Oid dbid, Oid relid)
+AORelGetHashEntry(Oid relid)
 {
-	AORelHashEntryData *aoentry = AORelLookupHashEntry(dbid, relid);
+	AORelHashEntryData *aoentry = AORelLookupHashEntry(relid);
 
 	if (!aoentry)
 		ereport(ERROR,
@@ -444,12 +439,12 @@ AORelGetHashEntry(Oid dbid, Oid relid)
  * if it errors out.
  */
 static AORelHashEntryData *
-AORelGetOrCreateHashEntry(Oid dbid, Oid relid)
+AORelGetOrCreateHashEntry(Oid relid)
 {
 
 	AORelHashEntryData *aoentry = NULL;
 
-	aoentry = AORelLookupHashEntry(dbid, relid);
+	aoentry = AORelLookupHashEntry(relid);
 	if (aoentry != NULL)
 	{
 		return aoentry;
@@ -462,7 +457,7 @@ AORelGetOrCreateHashEntry(Oid dbid, Oid relid)
 	 * AORelCreateHashEntry will carefully release the AOSegFileLock, gather
 	 * the information, and then re-acquire AOSegFileLock.
 	 */
-	if (!AORelCreateHashEntry(dbid, relid))
+	if (!AORelCreateHashEntry(relid))
 	{
 		release_lightweight_lock();
 		ereport(ERROR,
@@ -472,7 +467,7 @@ AORelGetOrCreateHashEntry(Oid dbid, Oid relid)
 	}
 
 	/* get the hash entry for this relation (must exist) */
-	aoentry = AORelGetHashEntry(dbid, relid);
+	aoentry = AORelGetHashEntry(relid);
 	return aoentry;
 }
 
@@ -484,13 +479,13 @@ AORelGetOrCreateHashEntry(Oid dbid, Oid relid)
  *	this operation.
  */
 static AORelHashEntry
-AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists)
+AppendOnlyRelHashNew(Oid relid, bool *exists)
 {
 	AORelHashKey key;
 	AORelHashEntryData *aorelentry = NULL;
+	Oid dbid = MyDatabaseId;
 
 	Assert(Gp_role == GP_ROLE_DISPATCH);
-	AssertImply(dbid != InvalidDbid, dbid == MyDatabaseId);
 
 	/*
 	 * We do not want to exceed the max number of allowed entries since we
@@ -503,7 +498,7 @@ AppendOnlyRelHashNew(Oid dbid, Oid relid, bool *exists)
 	if (AppendOnlyWriter->num_existing_aorels >= MaxAppendOnlyTables)
 	{
 		/* see if there's already an existing entry for this relid */
-		aorelentry = AORelLookupHashEntry(dbid, relid);
+		aorelentry = AORelLookupHashEntry(relid);
 
 		/*
 		 * already have an entry for this rel? reuse it. don't have? try to
@@ -705,7 +700,7 @@ usedByConcurrentTransaction(AOSegfileStatus *segfilestat, int segno)
 }
 
 void
-DeregisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList)
+DeregisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 {
 	TransactionId CurrentXid = GetTopTransactionId();
 	AORelHashEntryData *aoentry;
@@ -724,7 +719,7 @@ DeregisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFile
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(dbid, relid);
+	aoentry = AORelGetOrCreateHashEntry(relid);
 	Assert(aoentry);
 	aoentry->txns_using_rel++;
 
@@ -750,7 +745,7 @@ DeregisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFile
 }
 
 void
-RegisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileList)
+RegisterSegnoForCompactionDrop(Oid relid, List *compactedSegmentFileList)
 {
 	TransactionId CurrentXid = GetTopTransactionId();
 	AORelHashEntryData *aoentry;
@@ -769,7 +764,7 @@ RegisterSegnoForCompactionDrop(Oid dbid, Oid relid, List *compactedSegmentFileLi
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(dbid, relid);
+	aoentry = AORelGetOrCreateHashEntry(relid);
 	Assert(aoentry);
 	aoentry->txns_using_rel++;
 
@@ -862,7 +857,7 @@ SetSegnoForCompaction(Relation rel,
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
+	aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
 	Assert(aoentry);
 
 	/*
@@ -1023,7 +1018,7 @@ SetSegnoForCompactionInsert(Relation rel,
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
+	aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
 	Assert(aoentry);
 
 	ereportif(Debug_appendonly_print_segfile_choice, LOG,
@@ -1172,7 +1167,7 @@ SetSegnoForWrite(Relation rel, int existingsegno)
 
 			acquire_lightweight_lock();
 
-			aoentry = AORelGetOrCreateHashEntry(rel->rd_node.dbNode, RelationGetRelid(rel));
+			aoentry = AORelGetOrCreateHashEntry(RelationGetRelid(rel));
 			Assert(aoentry);
 			ereportif(Debug_appendonly_print_segfile_choice, LOG,
 					  (errmsg("SetSegnoForWrite: got the hash entry for relation \"%s\" (%d)",
@@ -1746,7 +1741,7 @@ UpdateMasterAosegTotals(Relation parentrel, int segno, int64 tupcount, int64 mod
 	 * same trick for the aoseg table since MVCC protects us there in case we
 	 * abort.
 	 */
-	aoHashEntry = AORelGetHashEntry(parentrel->rd_node.dbNode, RelationGetRelid(parentrel));
+	aoHashEntry = AORelGetHashEntry(RelationGetRelid(parentrel));
 	aoHashEntry->relsegfiles[segno].tupsadded += tupcount;
 
 	UnregisterSnapshot(appendOnlyMetaDataSnapshot);
@@ -2112,7 +2107,7 @@ AtEOXact_AppendOnly(void)
 void
 GpFetchEntryFromAppendOnlyHash(Oid relid, AORelHashEntry foundAoEntry) {
 	acquire_lightweight_lock();
-	AORelHashEntry aoentry = AORelGetHashEntry(MyDatabaseId, relid);
+	AORelHashEntry aoentry = AORelGetHashEntry(relid);
 	memcpy(foundAoEntry, aoentry, sizeof(AORelHashEntryData));
 	release_lightweight_lock();
 }
@@ -2145,7 +2140,7 @@ GpRemoveEntryFromAppendOnlyHash(Oid relid) {
 
 	acquire_lightweight_lock();
 
-	aoentry = AORelGetHashEntry(dbid, relid);
+	aoentry = AORelGetHashEntry(relid);
 
 	if (is_entry_in_use_by_other_transactions(aoentry)) {
 		release_lightweight_lock();
