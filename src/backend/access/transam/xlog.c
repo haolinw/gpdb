@@ -12730,8 +12730,8 @@ wait_to_avoid_large_repl_lag(void)
 {
 	Assert(!MyPgXact->delayChkpt);
 	/* rep_lag_avoidance_threshold is defined in KB */
-	if (rep_lag_avoidance_threshold &&
-		wal_bytes_written > (rep_lag_avoidance_threshold * 1024))
+	// if (rep_lag_avoidance_threshold &&
+	// 	wal_bytes_written > (rep_lag_avoidance_threshold * 1024))
 	{
 		/* we use local cached copy of LogwrtResult here */
 		SyncRepWaitForLSN(LogwrtResult.Flush, false);

@@ -2164,7 +2164,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_S | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_USER_SET
 		},
 		&CheckPointTimeout,
-		3600, 30, 3600,
+		300, 30, 3600,
 		NULL, NULL, NULL
 	},
 
