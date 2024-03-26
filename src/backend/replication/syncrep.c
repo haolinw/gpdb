@@ -561,10 +561,10 @@ SyncRepReleaseWaiters(void)
 
 	LWLockRelease(SyncRepLock);
 
-	elogif(debug_walrepl_syncrep, LOG,
-		 "released %d procs up to write %X/%X, %d procs up to flush %X/%X",
-		 numwrite, (uint32) (MyWalSnd->write >> 32), (uint32) MyWalSnd->write,
-		 numflush, (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
+	// elogif(debug_walrepl_syncrep, LOG,
+	// 	 "released %d procs up to write %X/%X, %d procs up to flush %X/%X",
+	// 	 numwrite, (uint32) (MyWalSnd->write >> 32), (uint32) MyWalSnd->write,
+	// 	 numflush, (uint32) (MyWalSnd->flush >> 32), (uint32) MyWalSnd->flush);
 
 	/*
 	 * If we are managing the highest priority standby, though we weren't

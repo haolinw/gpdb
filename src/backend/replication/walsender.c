@@ -2528,11 +2528,11 @@ XLogSendPhysical(void)
 		WalSndCaughtUp = true;
 		WalSndCaughtUpWithinRange = true;
 
-		elogif(debug_walrepl_snd, LOG,
-				"walsnd xlogSend -- "
-				"SendRqstPtr equals sentPtr (%X/%X). Nothing to read from "
-				"xlog. Setting caughtup and caughtup_within_range before return.",
-			   (uint32) (sentPtr >> 32), (uint32) sentPtr);
+		// elogif(debug_walrepl_snd, LOG,
+		// 		"walsnd xlogSend -- "
+		// 		"SendRqstPtr equals sentPtr (%X/%X). Nothing to read from "
+		// 		"xlog. Setting caughtup and caughtup_within_range before return.",
+		// 	   (uint32) (sentPtr >> 32), (uint32) sentPtr);
 		return;
 	}
 
@@ -3151,10 +3151,10 @@ WalSndSetXLogCleanUpTo(XLogRecPtr xlogPtr)
 
 	Assert(am_walsender);
 
-	elogif(debug_walrepl_snd, LOG,
-			"walsnd xlog cleanupto -- "
-			"Setting the WAL sender xlogCleanUpto attribute to %X/%X.",
-		   (uint32) (xlogPtr >> 32), (uint32) xlogPtr);
+	// elogif(debug_walrepl_snd, LOG,
+	// 		"walsnd xlog cleanupto -- "
+	// 		"Setting the WAL sender xlogCleanUpto attribute to %X/%X.",
+	// 	   (uint32) (xlogPtr >> 32), (uint32) xlogPtr);
 
 	SpinLockAcquire(&walsnd->mutex);
 	walsnd->xlogCleanUpTo = xlogPtr;
