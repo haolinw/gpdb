@@ -573,6 +573,7 @@ AppendOnlyVisimap_IsVisible(
 {
 	bool isAllVisible, result;
 	int rangeid = 0;
+	bool test_allvisible PG_USED_FOR_ASSERTS_ONLY = false;
 
 	Assert(visiMap);
 
@@ -584,8 +585,14 @@ AppendOnlyVisimap_IsVisible(
 	if (gp_aovisimap_max_cache_entries > 0)
 	{
 		rangeid = AppendOnlyVisimapCache_Find(visiMap, aoTupleId);
+
+#ifdef USE_ASSERT_CHECKING
+		/* for test only, defer returning for checking consistency */
+		test_allvisible = AppendOnlyVisimapCache_RangeIsAllVisible(&visiMap->visimapCache, rangeid);
+#else
 		if (AppendOnlyVisimapCache_RangeIsAllVisible(&visiMap->visimapCache, rangeid))
 			return true;
+#endif
 	}
 
 	AppendOnlyVisimap_LoadTuple(visiMap, aoTupleId);
@@ -594,6 +601,19 @@ AppendOnlyVisimap_IsVisible(
 	result = AppendOnlyVisimapEntry_IsVisible(&visiMap->visimapEntry,
 											  aoTupleId,
 											  &isAllVisible);
+
+#ifdef USE_ASSERT_CHECKING
+	/* for test only, check consistency */
+	if (test_allvisible)
+	{
+		if (test_allvisible != isAllVisible)
+			ereport(WARNING, (errmsg("inconsistent visibility: visimap: %p, rangeid: %d, "
+					"test_allvisible: true, isAllVisible: false.", visiMap, rangeid),
+					errprintstack(true)));
+
+		return true;
+	}
+#endif
 	
 	if (gp_aovisimap_max_cache_entries > 0)
 		AppendOnlyVisimapCache_Update(&visiMap->visimapCache, rangeid, isAllVisible);
