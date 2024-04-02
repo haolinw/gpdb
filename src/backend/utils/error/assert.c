@@ -46,6 +46,9 @@ ExceptionalCondition(const char *conditionName,
 				errmsg("Unexpected internal error"),
 				errdetail("%s(\"%s\", File: \"%s\", Line: %d)\n",
 						  errorType, conditionName, fileName, lineNumber));
+
+	// test only
+	ereport(WARNING, (errmsg("ExceptionalCondition backtrace: "), errprintstack(true)));
 				
 	/* Usually this shouldn't be needed, but make sure the msg went out */
 	fflush(stderr);

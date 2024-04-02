@@ -606,6 +606,10 @@ AppendOnlyVisimap_IsVisible(
 	/* for test only, check consistency */
 	if (test_allvisible)
 	{
+		/*
+		 * Reports a warning for being more informative in live instead of
+		 * ending with failure of Assert(test_allvisible == isAllVisible).
+		 */
 		if (test_allvisible != isAllVisible)
 			ereport(WARNING, (errmsg("inconsistent visibility: visimap: %p, rangeid: %d, "
 					"test_allvisible: true, isAllVisible: false.", visiMap, rangeid),
