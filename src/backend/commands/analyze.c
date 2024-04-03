@@ -2658,8 +2658,10 @@ acquire_sample_rows_dispatcher(Relation onerel, bool inh, int elevel,
 	 * may result in different behaviour under different acl configuration.
 	 */
 	initStringInfo(&str);
-	appendStringInfo(&str, "select pg_catalog.gp_acquire_sample_rows(%u, %d, '%s');",
-					 RelationGetRelid(onerel),
+	// appendStringInfo(&str, "select pg_catalog.gp_acquire_sample_rows(%u, %d, '%s');",
+	appendStringInfo(&str, "select pg_catalog.gp_acquire_sample_rows('%s'::regclass, %d, '%s');",
+					//  RelationGetRelid(onerel),
+					 RelationGetRelationName(onerel),
 					 perseg_targrows,
 					 inh ? "t" : "f");
 
