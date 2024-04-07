@@ -83,6 +83,7 @@
 
 #include "access/clog.h"
 
+
 /*
  * Set the buffer dirty after setting t_infomask
  */
@@ -1256,13 +1257,20 @@ HeapTupleSatisfiesMVCC(Relation relation, HeapTuple htup, Snapshot snapshot,
 
 		if (gp_clog_wait_useconds > 0)
 		{
-			XidStatus xidstatus = TransactionLogFetch(transactionId);
-			while (xidstatus == TRANSACTION_STATUS_IN_PROGRESS)
+			XidStatus xidstatus;
+			int count = 0;
+
+			while ((xidstatus = TransactionLogFetch(HeapTupleHeaderGetRawXmax(tuple)))
+					== TRANSACTION_STATUS_IN_PROGRESS)
 			{
 				pg_usleep(gp_clog_wait_useconds);
-				elog(LOG, "[gp_clog_wait_useconds] sleep %dus", gp_clog_wait_useconds);
+				count++;
 			}
-			ereport(LOG, (errmsg("[gp_clog_wait_useconds]"), errprintstack(true)));
+
+			if (count > 0)
+				ereport(LOG, (errmsg("[gp_clog_wait_useconds] sleep %dus times %d on xid %d",
+						gp_clog_wait_useconds, count, HeapTupleHeaderGetRawXmax(tuple))), errprintstack((true)));
+
 		}
 
 		if (!(snapshotCheckResult == XID_SURELY_COMMITTED || TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple))))

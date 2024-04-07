@@ -36,7 +36,6 @@ static XidStatus cachedFetchXidStatus;
 static XLogRecPtr cachedCommitLSN;
 
 /* Local functions */
-static XidStatus TransactionLogFetch(TransactionId transactionId);
 
 
 /* ----------------------------------------------------------------
@@ -49,7 +48,7 @@ static XidStatus TransactionLogFetch(TransactionId transactionId);
 /*
  * TransactionLogFetch --- fetch commit status of specified transaction id
  */
-static XidStatus
+XidStatus
 TransactionLogFetch(TransactionId transactionId)
 {
 	XidStatus	xidstatus;

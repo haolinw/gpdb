@@ -203,7 +203,6 @@
 		"gp_max_partition_level",
 		"gp_max_plan_size",
 		"gp_max_slices",
-		"gp_clog_wait_useconds",
 		"gp_max_system_slices",
 		"gp_motion_cost_per_row",
 		"gp_pause_on_restore_point_replay",
