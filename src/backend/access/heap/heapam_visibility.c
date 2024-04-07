@@ -1254,6 +1254,17 @@ HeapTupleSatisfiesMVCC(Relation relation, HeapTuple htup, Snapshot snapshot,
 		if (snapshotCheckResult == XID_IN_SNAPSHOT)
 			return true;
 
+		if (gp_clog_wait_useconds > 0)
+		{
+			XidStatus xidstatus = TransactionLogFetch(transactionId);
+			while (xidstatus == TRANSACTION_STATUS_IN_PROGRESS)
+			{
+				pg_usleep(gp_clog_wait_useconds);
+				elog(LOG, "[gp_clog_wait_useconds] sleep %dus", gp_clog_wait_useconds);
+			}
+			ereport(LOG, (errmsg("[gp_clog_wait_useconds]"), errprintstack(true)));
+		}
+
 		if (!(snapshotCheckResult == XID_SURELY_COMMITTED || TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple))))
 		{
 			/* it must have aborted or crashed */

@@ -587,6 +587,8 @@ extern bool optimizer_replicated_table_insert;
 extern int	gp_max_slices;
 extern int	gp_max_system_slices;
 
+extern int gp_clog_wait_useconds;
+
 /**
  * Enable logging of DPE match in optimizer.
  */
