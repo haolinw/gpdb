@@ -453,6 +453,8 @@ double		optimizer_jit_optimize_above_cost;
 /* Switch to toggle block-directory based sampling for AO/CO tables */
 bool		gp_enable_blkdir_sampling;
 
+int			gp_clog_wait_useconds = 0;
+
 static const struct config_enum_entry gp_log_format_options[] = {
 	{"text", 0},
 	{"csv", 1},
@@ -4389,6 +4391,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		&gp_max_parallel_cursors,
 		-1, -1, 1024,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_clog_wait_useconds", PGC_USERSET, PRESET_OPTIONS,
+			gettext_noop("Maximum slices for a single query"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&gp_clog_wait_useconds,
+		0, 0, INT_MAX, NULL, NULL
 	},
 
 #ifdef GP_ALLOC_DEBUG

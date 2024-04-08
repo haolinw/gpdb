@@ -54,6 +54,7 @@
 		"gp_ignore_error_table",
 		"gp_indexcheck_insert",
 		"gp_initial_bad_row_limit",
+		"gp_clog_wait_useconds",
 		"gp_interconnect_address_type",
 		"gp_interconnect_cache_future_packets",
 		"gp_interconnect_cursor_ic_table_size",

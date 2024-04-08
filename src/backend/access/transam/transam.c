@@ -94,6 +94,26 @@ TransactionLogFetch(TransactionId transactionId)
 	return xidstatus;
 }
 
+void
+TransactionIdInProgress(TransactionId transactionId)
+{
+	XidStatus xidstatus;
+	int count = 0;
+
+	if (gp_clog_wait_useconds == 0)
+		return;
+
+	while ((xidstatus = TransactionLogFetch(transactionId)) == TRANSACTION_STATUS_IN_PROGRESS)
+	{
+		pg_usleep(gp_clog_wait_useconds);
+		count++;
+	}
+
+	if (count > 0)
+		ereport(LOG, (errmsg("[gp_clog_wait_useconds] waited for %dus to reach status %d on xid %d",
+				gp_clog_wait_useconds * count, xidstatus, transactionId)), errprintstack((true)));
+}
+
 /* ----------------------------------------------------------------
  *						Interface functions
  *

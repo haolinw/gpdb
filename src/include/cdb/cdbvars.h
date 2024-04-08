@@ -702,6 +702,7 @@ extern bool	log_autostats;
 
 extern bool	gp_explain_jit;
 
+extern int gp_clog_wait_useconds;
 
 /* --------------------------------------------------------------------------------------------------
  * Server debugging
