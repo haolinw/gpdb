@@ -1,0 +1,3 @@
+test: disable_autovacuum
+test: alter_table_set_am udf_exception_blocks
+test: enable_autovacuum
