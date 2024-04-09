@@ -194,7 +194,7 @@ extern bool gp_pause_on_restore_point_replay;
 /*
  * prototypes for functions in transam/transam.c
  */
-extern void TransactionIdInProgress(TransactionId transactionId);
+extern bool TransactionIdInProgress(TransactionId transactionId);
 extern bool TransactionIdDidCommit(TransactionId transactionId);
 extern bool TransactionIdDidAbort(TransactionId transactionId);
 extern bool TransactionIdDidAbortForReader(TransactionId transactionId);

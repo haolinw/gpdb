@@ -94,24 +94,54 @@ TransactionLogFetch(TransactionId transactionId)
 	return xidstatus;
 }
 
-void
+// void
+// TransactionIdInProgress(TransactionId transactionId)
+// {
+// 	XidStatus xidstatus;
+// 	int count = 0;
+
+// 	if (gp_clog_wait_useconds == 0)
+// 		return false;
+
+// 	while ((xidstatus = TransactionLogFetch(transactionId)) == TRANSACTION_STATUS_IN_PROGRESS)
+// 	{
+// 		pg_usleep(gp_clog_wait_useconds);
+// 		count++;
+// 	}
+
+// 	if (count > 0)
+// 		ereport(LOG, (errmsg("[gp_clog_wait_useconds] waited for %dus to reach status %d on xid %d",
+// 				gp_clog_wait_useconds * count, xidstatus, transactionId)), errprintstack(true));
+// }
+
+/*
+ * Similar like Upstream TransactionIdIsInProgress() slowest way (Step 4) to know
+ * the current transaction is in progress or not.
+ * 
+ * As the comments of `TransactionIdIsInProgress` indication, lookup clog is the
+ * slowest way to know whether the transaction status is in progress or not, so
+ * there were other faster ways to check status from like PGXACT or PGPROC structure,
+ * this is the reason why the old code used to consider in-progress status.
+ * Later, another faster way which consults XidInMVCCSnapshot was introduced in commit:
+ * https://github.com/greenplum-db/gpdb-postgres-merge/commit/8a7d0701814a4e293efad22091d6f6fb441bbe1c,
+ * replaced TransactionIdIsInProgress.
+ * 
+ * To ensure consulting snapshot covering all cases which TransactionIdIsInProgress covered,
+ * needs to introduce assertion to guard this behavior.
+ */
+bool
 TransactionIdInProgress(TransactionId transactionId)
 {
 	XidStatus xidstatus;
-	int count = 0;
-
-	if (gp_clog_wait_useconds == 0)
-		return;
-
-	while ((xidstatus = TransactionLogFetch(transactionId)) == TRANSACTION_STATUS_IN_PROGRESS)
+	
+	if (gp_clog_wait_useconds > 0 &&
+		(xidstatus = TransactionLogFetch(transactionId)) == TRANSACTION_STATUS_IN_PROGRESS)
 	{
-		pg_usleep(gp_clog_wait_useconds);
-		count++;
+		ereport(LOG, (errmsg("[TransactionIdIsInProgress] in progress transaction")), errprintstack(true));
+		return true;
 	}
 
-	if (count > 0)
-		ereport(LOG, (errmsg("[gp_clog_wait_useconds] waited for %dus to reach status %d on xid %d",
-				gp_clog_wait_useconds * count, xidstatus, transactionId)), errprintstack((true)));
+	return false;
 }
 
 /* ----------------------------------------------------------------
