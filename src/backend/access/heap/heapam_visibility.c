@@ -1254,8 +1254,9 @@ HeapTupleSatisfiesMVCC(Relation relation, HeapTuple htup, Snapshot snapshot,
 		if (snapshotCheckResult == XID_IN_SNAPSHOT)
 			return true;
 
-		if (TransactionIdInProgress(HeapTupleHeaderGetRawXmax(tuple)))
-			return true;
+#ifdef USE_ASSERT_CHECKING
+		TransactionIdStillInProgress(HeapTupleHeaderGetRawXmax(tuple));
+#endif
 
 		if (!(snapshotCheckResult == XID_SURELY_COMMITTED || TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple))))
 		{

@@ -144,6 +144,15 @@ TransactionIdInProgress(TransactionId transactionId)
 	return false;
 }
 
+#ifdef USE_ASSERT_CHECKING
+TransactionIdStillInProgress(TransactionId transactionId)
+{
+	XidStatus xidstatus = TransactionLogFetch(transactionId);
+	if (xidstatus == TRANSACTION_STATUS_IN_PROGRESS)
+		ereport(ERROR, (errmsg("In-progress transaction %d is not in snapshot.", transactionId)), errprintstack(true));
+}
+#endif
+
 /* ----------------------------------------------------------------
  *						Interface functions
  *
@@ -213,7 +222,7 @@ TransactionIdDidCommit(TransactionId transactionId)
 			return false;
 		}
 		return TransactionIdDidCommit(parentXid);
-	}
+	}	
 
 	/*
 	 * It's not committed.
