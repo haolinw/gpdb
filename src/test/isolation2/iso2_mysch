@@ -1,0 +1,3 @@
+# test: disable_autovacuum
+test: aocs_sampling_test
+# test: enable_autovacuum
