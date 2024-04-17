@@ -11,20 +11,20 @@
 --
 
 -- partially same as Case 6 of tablesample.source
-create table test_dead_values_return_@amname@(i int, j int, k int) using @amname@;
-insert into test_dead_values_return_@amname@ select 1, j, j from generate_series(1, 10) j;
+create table test_dead_values_return_@amname@(i int, j int, k text, l text) using @amname@;
+insert into test_dead_values_return_@amname@ select 1, j, repeat('k', j), repeat('l', j) from generate_series(1, 10) j;
 delete from test_dead_values_return_@amname@ where j % 2 = 0;
 select * from test_dead_values_return_@amname@;
 select * from gp_acquire_sample_rows('test_dead_values_return_@amname@'::regclass, 10000, 'f') as
-  (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, i int, j int, k int);
+  (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, i int, j int, k text, l text);
 
 truncate test_dead_values_return_@amname@;
 
 1: begin;
 2: begin;
 
-1: insert into test_dead_values_return_@amname@ select 2, j, j from generate_series(1, 10) j;
-2: insert into test_dead_values_return_@amname@ select 2, j, j from generate_series(11, 20) j;
+1: insert into test_dead_values_return_@amname@ select 2, j, repeat('k', j), repeat('l', j) from generate_series(1, 10) j;
+2: insert into test_dead_values_return_@amname@ select 2, j, repeat('k', j), repeat('l', j) from generate_series(11, 20) j;
 
 2: abort;
 1: commit;
@@ -32,8 +32,8 @@ truncate test_dead_values_return_@amname@;
 1: begin;
 2: begin;
 
-1: insert into test_dead_values_return_@amname@ select 2, j, j from generate_series(21, 30) j;
-2: insert into test_dead_values_return_@amname@ select 2, j, j from generate_series(31, 40) j;
+1: insert into test_dead_values_return_@amname@ select 2, j, repeat('k', j), repeat('l', j) from generate_series(21, 30) j;
+2: insert into test_dead_values_return_@amname@ select 2, j, repeat('k', j), repeat('l', j) from generate_series(31, 40) j;
 2: commit;
 
 1: delete from test_dead_values_return_@amname@ where j % 2 = 1;
@@ -41,6 +41,6 @@ truncate test_dead_values_return_@amname@;
 
 select * from test_dead_values_return_@amname@;
 select * from gp_acquire_sample_rows('test_dead_values_return_@amname@'::regclass, 10000, 'f') as
-  (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, i int, j int, k int);
+  (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, i int, j int, k text, l text);
 
 drop table test_dead_values_return_@amname@;

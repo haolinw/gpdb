@@ -1,3 +1,3 @@
 # test: disable_autovacuum
-test: aocs_sampling_test
+test: uao/aocs_sampling_test_column
 # test: enable_autovacuum
