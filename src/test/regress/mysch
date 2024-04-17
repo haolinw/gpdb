@@ -1,0 +1,4 @@
+test: test_setup
+# test: disable_autovacuum
+test: external_table external_table_union_all external_table_create_privs external_table_persistent_error_log column_compression eagerfree alter_table_aocs alter_table_aocs2 alter_distribution_policy aoco_privileges
+# test: enable_autovacuum
