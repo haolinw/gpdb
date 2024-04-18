@@ -1925,6 +1925,8 @@ DatumStreamBlockRead_AdvanceDense(DatumStreamBlockRead * dsr)
 	++dsr->physical_datum_index;
 	//Initially, -1.
 
+	Assert(dsr->physical_datum_index < dsr->physical_datum_count);
+
 		if (dsr->physical_datum_index == 0)
 	{
 		/* Pre-positioned by block read to first item. */
@@ -1973,6 +1975,23 @@ DatumStreamBlockRead_AdvanceDense(DatumStreamBlockRead * dsr)
 
 			s = (struct varlena *) dsr->datump;
 			dsr->datump += VARSIZE_ANY(s);
+
+			// For Test
+			ereport(WARNING,
+						(errmsg("[DatumStreamBlockRead_AdvanceDense] physical_datum_index %d, physical_datum_count %d, "
+								"nth %d, logical_row_count %d, "
+								"item_beginp %p, (item_beginp - datum_beginp (%p)) " INT64_FORMAT ", s %p, datump %p",
+								dsr->physical_datum_index,
+								dsr->physical_datum_count,
+								dsr->nth,
+								dsr->logical_row_count,
+								item_beginp,
+								dsr->datum_beginp,
+								(int64) (item_beginp - dsr->datum_beginp),
+								s,
+								dsr->datump),
+						 errdetail_datumstreamblockread(dsr),
+						 errcontext_datumstreamblockread(dsr)));
 
 			/*
 			 * Skip any possible zero paddings AFTER varlena data.
