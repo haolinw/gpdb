@@ -1925,6 +1925,8 @@ DatumStreamBlockRead_AdvanceDense(DatumStreamBlockRead * dsr)
 	++dsr->physical_datum_index;
 	//Initially, -1.
 
+	Assert(dsr->physical_datum_index < dsr->physical_datum_count);
+
 		if (dsr->physical_datum_index == 0)
 	{
 		/* Pre-positioned by block read to first item. */
