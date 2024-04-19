@@ -1976,6 +1976,19 @@ DatumStreamBlockRead_AdvanceDense(DatumStreamBlockRead * dsr)
 			s = (struct varlena *) dsr->datump;
 			dsr->datump += VARSIZE_ANY(s);
 
+			ereport(WARNING,
+						(errmsg("[DatumStreamBlockRead_AdvanceDense] Datum stream block read advanced to variable-length item index %d "
+								"(nth %d, logical row count %d, "
+								"previous item begin %p, previous item offset " INT64_FORMAT ", next item begin %p)",
+								dsr->physical_datum_index,
+								dsr->nth,
+								dsr->logical_row_count,
+								item_beginp,
+								(int64) (item_beginp - dsr->datum_beginp),
+								dsr->datump),
+						 errdetail_datumstreamblockread(dsr),
+						 errcontext_datumstreamblockread(dsr)));
+
 			/*
 			 * Skip any possible zero paddings AFTER varlena data.
 			 */
