@@ -1268,7 +1268,11 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* continue next block */
 			}
 			else
-				pg_unreachable(); /* unreachable code */
+				/* fatal and raise message for unexpected code path here */
+				ereport(FATAL,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("Unexpected result was returned when getting AO block info for table '%s', column %d.",
+						 		AppendOnlyStorageRead_RelationName(&ds->ao_read), attno)));
 		}
 	}
 
