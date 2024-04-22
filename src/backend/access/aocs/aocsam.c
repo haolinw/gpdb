@@ -1269,7 +1269,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 			}
 			else
 				/* fatal and raise message for unexpected code path here */
-				ereport(FATAL,
+				ereport(PANIC,
 						(errcode(ERRCODE_INTERNAL_ERROR),
 						 errmsg("Unexpected result was returned when getting AO block info for table '%s', column %d.",
 						 		AppendOnlyStorageRead_RelationName(&ds->ao_read), attno)));

@@ -1321,7 +1321,7 @@ appendonly_getblock(AppendOnlyScanDesc scan, int64 targrow, int64 *startrow)
 		}
 		else
 			/* fatal and raise message for unexpected code path here */
-			ereport(FATAL,
+			ereport(PANIC,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("Unexpected result was returned when getting AO block info for table '%s'",
 							AppendOnlyStorageRead_RelationName(&scan->storageRead))));
