@@ -1,0 +1,2 @@
+test: test_setup
+test: rle rle_delta dsp not_out_of_shmem_exit_slots create_am_gp

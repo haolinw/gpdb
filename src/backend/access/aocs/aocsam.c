@@ -1144,7 +1144,7 @@ out:
 	if (chkvisimap)
 		*chkvisimap = visible;
 
-	elogif(Debug_appendonly_print_datumstream, LOG,
+	elogif(true, LOG,
 		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, rownum: %ld, "
 		   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d, ret: %ld]",
 		   attno, endrow, startrow, segno, rownum, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
@@ -1195,6 +1195,12 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				slot->tts_values[attno] = getmissingattr(slot->tts_tupleDescriptor,
 															attno + 1,
 															&slot->tts_isnull[attno]);
+				elogif(true, LOG,
+					   "aocs_gettuple(1): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, "
+					   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+					   attno, targrow, startrow, phyrow, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+					   ds->blockRowCount, ds->blockRowsProcessed);
+
 				continue;
 			}
 		}
@@ -1214,14 +1220,27 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 											attno, startrow, targrow, 
 											i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
 											slot);
+
 				if (!chkvisimap)
 					ret = false;
+
+				elogif(true, LOG,
+					   "aocs_gettuple(1.5): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
+					   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+					   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+					   ds->blockRowCount, ds->blockRowsProcessed);
 
 				/* haven't finished scanning on current block */
 				continue;
 			}
 			else
 				startrow += rowcount; /* skip scanning remaining rows */
+
+			elogif(true, LOG,
+                   "aocs_gettuple(2): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
+                   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+                   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+                   ds->blockRowCount, ds->blockRowsProcessed);
 		}
 
 		/*
@@ -1259,6 +1278,12 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 					if (!chkvisimap)
 						ret = false;
 
+					elogif(true, LOG,
+						   "aocs_gettuple(2.5): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
+						   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+						   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+						   ds->blockRowCount, ds->blockRowsProcessed);
+
 					/* done this column */
 					break;
 				}
@@ -1266,6 +1291,12 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				startrow += rowcount;
 				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
 				/* continue next block */
+
+				elogif(true, LOG,
+					   "aocs_gettuple(3): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, "
+					   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+					   attno, targrow, startrow, phyrow, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+					   ds->blockRowCount, ds->blockRowsProcessed);
 			}
 			else
 				/* fatal and raise message for unexpected code path here */
