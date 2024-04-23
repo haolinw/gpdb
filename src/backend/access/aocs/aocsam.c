@@ -1257,6 +1257,40 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* new block, reset blockRowsProcessed */
 				ds->blockRowsProcessed = 0;
 
+				if ((attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ]) &&
+					phyrow >= ds->blockFirstRowNum && phyrow <= ds->blockFirstRowNum + rowcount - 1)
+				{
+					int64 blocksRead, phyrow2;
+
+					/* read a new buffer to consume */
+					datumstreamread_block_content(ds);
+
+					AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
+					blocksRead =
+						RelationGuessNumberOfBlocksFromSize(scan->totalBytesRead);
+					pgstat_count_buffer_read_ao(scan->rs_base.rs_rd,
+												blocksRead);
+
+					/* read the value, visimap check only needed for the anchor column */
+					phyrow2 = aocs_gettuple_column(scan, 
+												attno, startrow, targrow, 
+												i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
+												slot);
+					Assert(phyrow == phyrow2);
+				
+					if (!chkvisimap)
+						ret = false;
+
+					elogif(true, LOG,
+						   "aocs_gettuple(2.5): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
+						   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
+						   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+						   ds->blockRowCount, ds->blockRowsProcessed);
+
+					/* done this column */
+					break;
+				}
+
 				if (startrow + rowcount - 1 >= targrow)
 				{
 					int64 blocksRead;
