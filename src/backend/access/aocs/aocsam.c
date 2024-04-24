@@ -1203,8 +1203,11 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				slot->tts_values[attno] = getmissingattr(slot->tts_tupleDescriptor,
 														 attno + 1,
 														 &slot->tts_isnull[attno]);
-				continue;
 			}
+			else
+				aocs_gettuple_column2(scan, attno, phyrow, slot);
+
+			continue;
 		}
 
 		if (ds->blockRowCount <= 0)
@@ -1229,7 +1232,10 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				continue;
 			}
 			else
+			{
 				startrow += rowcount; /* skip scanning remaining rows */
+				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
+			}
 		}
 
 		/*
@@ -1246,46 +1252,38 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* new block, reset blockRowsProcessed */
 				ds->blockRowsProcessed = 0;
 
-				/*
-				 * Get the tuple directly if it's not an anchor column as
-				 * we already know the rowNum which is the same as `phyrow`.
-				 */
-				if (attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ] &&
-					phyrow >= ds->blockFirstRowNum &&
-					phyrow <= ds->blockFirstRowNum + rowcount - 1)
-				{
-					int64 blocksRead, rownum;
+				// /*
+				//  * Get the tuple directly if it's not an anchor column as
+				//  * we already know the rowNum which is the same as `phyrow`.
+				//  */
+				// if (attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ] &&
+				// 	phyrow >= ds->blockFirstRowNum)
+				// {
+				// 	if (phyrow <= ds->blockFirstRowNum + rowcount - 1)
+				// 	{
+				// 		int64 blocksRead, rownum;
 
-					/* read a new buffer to consume */
-					datumstreamread_block_content(ds);
+				// 		/* read a new buffer to consume */
+				// 		datumstreamread_block_content(ds);
 
-					AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
-					blocksRead =
-						RelationGuessNumberOfBlocksFromSize(scan->totalBytesRead);
-					pgstat_count_buffer_read_ao(scan->rs_base.rs_rd,
-												blocksRead);
+				// 		AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
+				// 		blocksRead =
+				// 			RelationGuessNumberOfBlocksFromSize(scan->totalBytesRead);
+				// 		pgstat_count_buffer_read_ao(scan->rs_base.rs_rd,
+				// 									blocksRead);
 
-					/* read the value, visimap check only needed for the anchor column */
-					rownum = aocs_gettuple_column(scan, 
-												  attno, startrow, targrow, phyrow,
-												  NULL,
-												  slot);
-					
-					/* ensure the returned `rownum` is same as `phyrow` */
-					Assert(rownum == phyrow);
-				
-					if (!chkvisimap)
-						ret = false;
+				// 		/* read the value, visimap check only needed for the anchor column */
+				// 		rownum = aocs_gettuple_column(scan, 
+				// 									  attno, startrow, targrow, phyrow,
+				// 									  NULL,
+				// 									  slot);
+				// 		/* done this column */
+				// 		break;
+				// 	}
 
-					elogif(Debug_appendonly_print_datumstream, LOG,
-						   "aocs_gettuple(2.5): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
-						   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
-						   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
-						   ds->blockRowCount, ds->blockRowsProcessed);
-
-					/* done this column */
-					break;
-				}
+				// 	AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
+				// 	continue;
+				// }
 
 				if (startrow + rowcount - 1 >= targrow)
 				{
@@ -1302,9 +1300,9 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 					/* read the value, visimap check only needed for the anchor column */
 					phyrow = aocs_gettuple_column(scan, 
-												attno, startrow, targrow, InvalidAORowNum,
-												i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
-												slot);
+												  attno, startrow, targrow, InvalidAORowNum,
+												  i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
+												  slot);
 					if (!chkvisimap)
 						ret = false;
 
