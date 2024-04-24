@@ -1153,6 +1153,52 @@ out:
 	return rownum;
 }
 
+static bool
+aocs_get_column_datum(AOCSScanDesc scan, AttrNumber attno, int64 rownum, TupleTableSlot *slot)
+{
+	DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
+
+	Assert(attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ]);
+
+	while (rownum != InvalidAORowNum)
+	{
+		if (rownum >= ds->blockFirstRowNum &&
+			rownum <= ds->blockFirstRowNum + ds->blockRowCount - 1)
+		{
+			int64 blocksRead;
+			Datum *values;
+			bool *nulls;
+
+			/* read a new buffer to consume */
+			datumstreamread_block_content(ds);
+
+			AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
+			blocksRead =
+				RelationGuessNumberOfBlocksFromSize(scan->totalBytesRead);
+			pgstat_count_buffer_read_ao(scan->rs_base.rs_rd,
+										blocksRead);
+
+			/* rowNumInBlock = rowNum - blockFirstRowNum */
+			datumstreamread_find(ds, rownum - ds->blockFirstRowNum);
+			values = slot->tts_values;
+			nulls = slot->tts_isnull;
+			datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
+
+			return true;
+		}
+
+		if (ds->blockRowCount > 0)
+			AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
+
+		if (!datumstreamread_block_info(ds))
+			return false;
+
+		Assert(ds->blockRowCount > 0);
+	}
+
+	return false;
+}
+
 /*
  * fetches all columns of the target tuple corresponding to `targrow`
  */
@@ -1195,8 +1241,24 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				slot->tts_values[attno] = getmissingattr(slot->tts_tupleDescriptor,
 															attno + 1,
 															&slot->tts_isnull[attno]);
-				continue;
 			}
+			else
+			{
+				if (!aocs_get_column_datum(scan, attno, phyrow, slot))
+				{
+					/*
+					 * Fatal and raise message for unexpected code path here.
+					 * We didn't use PANIC as having a read-only backend crash
+					 * the whole instance is a little overkill.
+					 */
+					ereport(FATAL,
+							(errcode(ERRCODE_INTERNAL_ERROR),
+							 errmsg("Unexpected result was returned when getting AO_COLUMN table '%s', row %ld, column %d.",
+									AppendOnlyStorageRead_RelationName(&ds->ao_read), phyrow, attno)));
+				}
+			}
+
+			continue;
 		}
 
 		if (ds->blockRowCount <= 0)
@@ -1275,7 +1337,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				 */
 				ereport(FATAL,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("Unexpected result was returned when getting AO block info for table '%s', column %d.",
+						 errmsg("Unexpected result was returned when getting AO_COLUMN block info for table '%s', column %d.",
 						 		AppendOnlyStorageRead_RelationName(&ds->ao_read), attno)));
 		}
 	}
