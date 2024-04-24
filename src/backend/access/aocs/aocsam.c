@@ -1162,6 +1162,43 @@ aocs_get_column_datum(AOCSScanDesc scan, AttrNumber attno, int64 rownum, TupleTa
 
 	while (rownum != InvalidAORowNum)
 	{
+		if (datumstreamread_block_info(ds))
+		{
+			if (rownum >= ds->blockFirstRowNum &&
+				rownum <= ds->blockFirstRowNum + ds->blockRowCount - 1)
+			{
+				int64 blocksRead;
+				Datum *values;
+				bool *nulls;
+
+				/* read a new buffer to consume */
+				datumstreamread_block_content(ds);
+
+				AOCSScanDesc_UpdateTotalBytesRead(scan, attno);
+				blocksRead =
+					RelationGuessNumberOfBlocksFromSize(scan->totalBytesRead);
+				pgstat_count_buffer_read_ao(scan->rs_base.rs_rd,
+											blocksRead);
+
+				/* rowNumInBlock = rowNum - blockFirstRowNum */
+				datumstreamread_find(ds, rownum - ds->blockFirstRowNum);
+				values = slot->tts_values;
+				nulls = slot->tts_isnull;
+				datumstreamread_get(ds, &(values[attno]), &(nulls[attno]));
+
+				return true;
+			}
+			else
+				AppendOnlyStorageRead_SkipCurrentBlock(&ds->ao_read);
+		}
+		else
+			break;
+	}
+
+	return false;
+
+	while (rownum != InvalidAORowNum)
+	{
 		if (rownum >= ds->blockFirstRowNum &&
 			rownum <= ds->blockFirstRowNum + ds->blockRowCount - 1)
 		{
