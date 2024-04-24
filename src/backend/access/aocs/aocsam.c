@@ -1092,7 +1092,7 @@ aocs_block_remaining_rows(DatumStreamRead *ds)
  * checking, the result of which will be written to chkvisimap.
  */
 static int64
-aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, bool *chkvisimap, TupleTableSlot *slot)
+aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 endrow, int64 phyrow, bool *chkvisimap, TupleTableSlot *slot)
 {
 	bool isSnapshotAny = (scan->rs_base.rs_snapshot == SnapshotAny);
 	DatumStreamRead *ds = scan->columnScanInfo.ds[attno];
@@ -1108,11 +1108,19 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		elog(ERROR, "AOCO varblock->blockFirstRowNum should be greater than zero.");
 
 	Assert(segno > InvalidFileSegNumber && segno <= AOTupleId_MaxSegmentFileNum);
-	Assert(startrow <= endrow);
 
-	rowstoprocess = endrow - startrow + 1;
-	nrows = ds->blockRowsProcessed + rowstoprocess;
-	rownum = ds->blockFirstRowNum + nrows - 1;
+	if (phyrow != InvalidAORowNum)
+	{
+		Assert(phyrow > 0);
+		rownum = phyrow;
+	}
+	else
+	{
+		Assert(startrow <= endrow);
+		rowstoprocess = endrow - startrow + 1;
+		nrows = ds->blockRowsProcessed + rowstoprocess;
+		rownum = ds->blockFirstRowNum + nrows - 1;
+	}
 
 	/* form the target tuple TID */
 	AOTupleIdInit(aotid, segno, rownum);
@@ -1188,13 +1196,13 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 			/* we should've got a valid phyrow when scanning the anchor column */
 			Assert(phyrow > 0);
 			if (AO_ATTR_VAL_IS_MISSING(phyrow,
-														attno,
-														scan->seginfo[scan->cur_seg]->segno,
-														scan->columnScanInfo.attnum_to_rownum))
+									   attno,
+									   scan->seginfo[scan->cur_seg]->segno,
+									   scan->columnScanInfo.attnum_to_rownum))
 			{
 				slot->tts_values[attno] = getmissingattr(slot->tts_tupleDescriptor,
-															attno + 1,
-															&slot->tts_isnull[attno]);
+														 attno + 1,
+														 &slot->tts_isnull[attno]);
 				continue;
 			}
 		}
@@ -1211,9 +1219,9 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 			{
 				/* read the value, visimap check only needed for the anchor column */
 				phyrow = aocs_gettuple_column(scan,
-											attno, startrow, targrow, 
-											i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
-											slot);
+											  attno, startrow, targrow, InvalidAORowNum,
+											  i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
+											  slot);
 				if (!chkvisimap)
 					ret = false;
 
@@ -1238,10 +1246,15 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* new block, reset blockRowsProcessed */
 				ds->blockRowsProcessed = 0;
 
-				if ((attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ]) &&
-					phyrow >= ds->blockFirstRowNum && phyrow <= ds->blockFirstRowNum + rowcount - 1)
+				/*
+				 * Get the tuple directly if it's not an anchor column as
+				 * we already know the rowNum which is the same as `phyrow`.
+				 */
+				if (attno != scan->columnScanInfo.proj_atts[ANCHOR_COL_IN_PROJ] &&
+					phyrow >= ds->blockFirstRowNum &&
+					phyrow <= ds->blockFirstRowNum + rowcount - 1)
 				{
-					int64 blocksRead, phyrow2;
+					int64 blocksRead, rownum;
 
 					/* read a new buffer to consume */
 					datumstreamread_block_content(ds);
@@ -1253,16 +1266,18 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 												blocksRead);
 
 					/* read the value, visimap check only needed for the anchor column */
-					phyrow2 = aocs_gettuple_column(scan, 
-												attno, startrow, targrow, 
-												i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
-												slot);
-					Assert(phyrow == phyrow2);
+					rownum = aocs_gettuple_column(scan, 
+												  attno, startrow, targrow, phyrow,
+												  NULL,
+												  slot);
+					
+					/* ensure the returned `rownum` is same as `phyrow` */
+					Assert(rownum == phyrow);
 				
 					if (!chkvisimap)
 						ret = false;
 
-					elogif(true, LOG,
+					elogif(Debug_appendonly_print_datumstream, LOG,
 						   "aocs_gettuple(2.5): [attno: %d, targrow: %ld, startrow: %ld, rownum: %ld, visible: %d "
 						   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d]",
 						   attno, targrow, startrow, phyrow, ret, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
@@ -1287,7 +1302,7 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 
 					/* read the value, visimap check only needed for the anchor column */
 					phyrow = aocs_gettuple_column(scan, 
-												attno, startrow, targrow, 
+												attno, startrow, targrow, InvalidAORowNum,
 												i == ANCHOR_COL_IN_PROJ ? &chkvisimap : NULL,
 												slot);
 					if (!chkvisimap)
@@ -1302,7 +1317,11 @@ aocs_gettuple(AOCSScanDesc scan, int64 targrow, TupleTableSlot *slot)
 				/* continue next block */
 			}
 			else
-				/* fatal and raise message for unexpected code path here */
+				/*
+				 * Fatal and raise message for unexpected code path here.
+				 * We didn't use PANIC as having a read-only backend crash
+				 * the whole instance is a little overkill.
+				 */
 				ereport(FATAL,
 						(errcode(ERRCODE_INTERNAL_ERROR),
 						 errmsg("Unexpected result was returned when getting AO block info for table '%s', column %d.",
