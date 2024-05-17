@@ -1481,6 +1481,8 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 	++dsr->physical_datum_index;
 	//Initially, -1.
 
+	// Assert(dsr->physical_datum_index < dsr->physical_datum_count);
+
 		if (dsr->physical_datum_index == 0)
 	{
 		/* Pre-positioned by block read to first item. */
@@ -1528,6 +1530,23 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 
 			dsr->datump += VARSIZE_ANY(s);
 
+			ereport(WARNING,
+						(errmsg("[DatumStreamBlockRead_AdvanceOrig] Datum stream block read advanced to variable-length item index %d, phycount=%d "
+								"(nth %d, logical row count %d, "
+								"previous item begin %p, previous item offset " INT64_FORMAT ", next item begin %p, after data pointer %p) "
+								"s=%p, VARSIZE_ANY(s)=%ld",
+								dsr->physical_datum_index,
+								dsr->physical_datum_count,
+								dsr->nth,
+								dsr->logical_row_count,
+								item_beginp,
+								(int64) (item_beginp - dsr->datum_beginp),
+								dsr->datump,
+								dsr->datum_afterp,
+								s, VARSIZE_ANY(s)),
+						 errdetail_datumstreamblockread(dsr),
+						 errcontext_datumstreamblockread(dsr)));
+
 			/*
 			 * Skip any possible zero paddings AFTER PREVIOUS varlena data.
 			 */
@@ -1543,7 +1562,7 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 #ifdef USE_ASSERT_CHECKING
 			if (dsr->datump > dsr->datum_afterp)
 			{
-				ereport(ERROR,
+				ereport(PANIC,
 						(errmsg("Datum stream block read pointer to variable-length item index %d out of bounds "
 								"(nth %d, logical row count %d, "
 								"current datum pointer %p, next datum pointer %p, after data pointer %p)",
@@ -1557,7 +1576,8 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 						 errcontext_datumstreamblockread(dsr)));
 			}
 
-			if (Debug_appendonly_print_scan_tuple)
+			// if (Debug_appendonly_print_scan_tuple)
+			if (true)
 			{
 				ereport(LOG,
 						(errmsg("Datum stream block read advanced to variable-length item index %d "
