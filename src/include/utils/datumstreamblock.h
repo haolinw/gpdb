@@ -1531,12 +1531,13 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 			dsr->datump += VARSIZE_ANY(s);
 
 			ereport(WARNING,
-						(errmsg("[DatumStreamBlockRead_AdvanceOrig] Datum stream block read advanced to variable-length item index %d, phycount=%d "
+						(errmsg("[DatumStreamBlockRead_AdvanceOrig] Datum stream block read advanced to variable-length item index %d, phycount=%d，pysize=%d "
 								"(nth %d, logical row count %d, "
 								"previous item begin %p, previous item offset " INT64_FORMAT ", next item begin %p, after data pointer %p) "
 								"s=%p, VARSIZE_ANY(s)=%ld",
 								dsr->physical_datum_index,
 								dsr->physical_datum_count,
+								dsr->physical_data_size,
 								dsr->nth,
 								dsr->logical_row_count,
 								item_beginp,
