@@ -75,7 +75,6 @@ datumstreamread_print_large_varlena_info(
 		 VarlenaInfoToString(p));
 }
 
-
 /*
  * Error detail and context callback for tracing or errors occurring during reading.
  */
@@ -91,6 +90,7 @@ datumstreamread_detail_callback(void *arg)
 	{
 		errdetail_appendonly_read_storage_content_header(&acc->ao_read);
 	}
+
 	return 0;
 }
 
@@ -121,6 +121,15 @@ datumstreamread_context_callback(void *arg)
 
 	return 0;
 }
+
+static void
+datumstreamread_verify_callback(void *arg)
+{
+	DatumStreamRead *acc = (DatumStreamRead *) arg;
+
+	Assert(acc->actual_segno == acc->expect_segno);
+}
+
 
 /*
  * Error detail and context callback for tracing or errors occurring during writing.
@@ -715,10 +724,12 @@ create_datumstreamread(
 							  &acc->typeInfo,
 							  acc->datumStreamVersion,
 							  acc->rle_can_have_compression,
-					 /* errdetailCallback */ datumstreamread_detail_callback,
+					/* errdetailCallback */ datumstreamread_detail_callback,
 							   /* errdetailArg */ (void *) acc,
-				   /* errcontextCallback */ datumstreamread_context_callback,
-							   /* errcontextArg */ (void *) acc);
+				   	/* errcontextCallback */ datumstreamread_context_callback,
+							   /* errcontextArg */ (void *) acc,
+					/* verify_callback */ datumstreamread_verify_callback,
+							   /* verify_arg */ (void *) acc);
 
 	Assert(acc->large_object_buffer == NULL);
 	Assert(acc->large_object_buffer_size == 0);
@@ -848,6 +859,7 @@ datumstreamread_open_file(DatumStreamRead * ds, char *fn, int64 eof, int64 eofUn
 
 	AppendOnlyStorageRead_OpenFile(&ds->ao_read, fn, version, ds->eof);
 
+	ds->expect_segno = segmentFileNum;
 	ds->need_close_file = true;
 }
 
@@ -880,6 +892,7 @@ datumstreamread_close_file(DatumStreamRead * ds)
 	 * reading in sampling scenario.
 	 */
 	ds->blockRowCount = 0;
+	ds->expect_segno = InvalidFileSegNumber;
 	ds->need_close_file = false;
 }
 
@@ -1181,6 +1194,8 @@ datumstreamread_block_content(DatumStreamRead * acc)
 {
 	Assert(acc);
 
+	acc->actual_segno = acc->expect_segno;
+
 	/*
 	 * Clear out state from previous block.
 	 */
@@ -1232,8 +1247,9 @@ datumstreamread_block_content(DatumStreamRead * acc)
 
 		if (Debug_appendonly_print_datumstream)
 			elog(LOG,
-				 "datumstream_read_block_content filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
+				 "datumstream_read_block_content actual_segno %d filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
 				 "ndatum %u contentLen %d datump %p",
+				 acc->expect_segno,
 				 acc->ao_read.bufferedRead.filePathName,
 				 acc->getBlockInfo.firstRow,
 				 acc->getBlockInfo.rowCnt,

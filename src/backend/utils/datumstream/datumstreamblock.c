@@ -100,6 +100,12 @@ errcontext_datumstreamblockread(
 	return 0;
 }
 
+void
+extra_verify_datumstreamblockread(DatumStreamBlockRead * dsr)
+{
+	dsr->verify_callback(dsr->verify_arg);
+}
+
 static int
 errcontext_datumstreamblockread_callback(
 										 void *arg)
@@ -350,7 +356,9 @@ DatumStreamBlockRead_Init(
 						  int (*errdetailCallback) (void *errdetailArg),
 						  void *errdetailArg,
 						  int (*errcontextCallback) (void *errcontextArg),
-						  void *errcontextArg)
+						  void *errcontextArg,
+						  void (*verify_callback) (void *verify_arg),
+						  void *verify_arg)
 {
 	memcpy(dsr->eyecatcher, DatumStreamBlockRead_Eyecatcher, DatumStreamBlockRead_EyecatcherLen);
 
@@ -364,6 +372,8 @@ DatumStreamBlockRead_Init(
 	dsr->errcontextArg = errcontextArg;
 	dsr->errcontextCallback = errcontextCallback;
 	dsr->errcontextArg = errcontextArg;
+	dsr->verify_callback = verify_callback;
+	dsr->verify_arg = verify_arg;
 
 	dsr->memctxt = CurrentMemoryContext;
 

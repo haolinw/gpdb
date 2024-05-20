@@ -1185,6 +1185,9 @@ typedef struct DatumStreamBlockRead
 	int			(*errcontextCallback) (void *errcontextArg);
 	void	   *errcontextArg;
 
+	void		(*verify_callback) (void *verify_arg);
+	void		*verify_arg;
+
 	MemoryContext memctxt;
 
 }	DatumStreamBlockRead;
@@ -1202,15 +1205,103 @@ extern int errdetail_datumstreamblockread(
 extern int errcontext_datumstreamblockread(
 								DatumStreamBlockRead * dsr);
 
+extern void extra_verify_datumstreamblockread(
+								DatumStreamBlockRead * dsr);
+
 #ifdef USE_ASSERT_CHECKING
 extern void DatumStreamBlockRead_PrintVarlenaInfo(
 									  DatumStreamBlockRead * dsr,
 									  uint8 * p);
-#endif
-
-#ifdef USE_ASSERT_CHECKING
 extern void DatumStreamBlockRead_CheckDenseGetInvariant(
 											DatumStreamBlockRead * dsr);
+
+/*
+ * Verify varlena data size.
+ *
+ * This is intended to ensure varlena data size doesn't exceed
+ * the boundary of the buffer memory.
+ * 
+ * If it was failed at this point, it indicates a programming
+ * error where the expected block wasn't read into the buffer.
+ * 
+ * Need to check and make sure datumstreamread_block_info ->
+ * datumstreamread_block_content was invoked correctly before
+ * entering into current function.
+ * 
+ * Refer to `gotContents` in `fetchFromCurrentBlock` function.
+ */
+static inline void
+DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
+{
+	struct varlena *s = (struct varlena *) dsr->datump;
+	int32 varsize = VARSIZE_ANY(s);
+	int32 varsizeexhdr = VARSIZE_ANY_EXHDR(s);
+
+	if (varsize < 0 || varsize > dsr->physical_data_size ||
+		varsizeexhdr < 0 || varsizeexhdr >= varsize)
+	{
+		ereport(ERROR,
+				(errmsg("Datum stream block %s read variable-length item index %d length is invalid "
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->physical_data_size,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+				errdetail_datumstreamblockread(dsr),
+				errcontext_datumstreamblockread(dsr)));
+	}
+
+	if (dsr->datump + varsize > dsr->datum_afterp)
+	{
+		ereport(ERROR,
+				(errmsg("Datum stream block %s read variable-length item index %d length goes beyond end of block "
+						"(nth %d, logical row count %d, item length %d, item data length %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+				errdetail_datumstreamblockread(dsr),
+				errcontext_datumstreamblockread(dsr)));
+	}
+
+	if (Debug_appendonly_print_scan_tuple)
+	{
+		ereport(LOG,
+				(errmsg("Datum stream block %s read variable-length item index %d "
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->physical_data_size,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+					errdetail_datumstreamblockread(dsr),
+					errcontext_datumstreamblockread(dsr)));
+	}
+
+	/* ensure we are reading the expected segfile */
+	extra_verify_datumstreamblockread(dsr);
+}
 #endif
 
 /* Stream access method */
@@ -1261,9 +1352,6 @@ DatumStreamBlockRead_Get(DatumStreamBlockRead * dsr, Datum *datum, bool *null)
 
 	if (dsr->typeInfo.datumlen == -1)
 	{
-#ifdef USE_ASSERT_CHECKING
-		int32		varLen;
-#endif
 		Assert(dsr->delta_item == false);
 
 		*datum = PointerGetDatum(dsr->datump);
@@ -1274,64 +1362,13 @@ DatumStreamBlockRead_Get(DatumStreamBlockRead * dsr, Datum *datum, bool *null)
 		 * DEBUG builds...
 		 */
 #ifdef USE_ASSERT_CHECKING
-		varLen = VARSIZE_ANY(DatumGetPointer(*datum));
-
-		if (varLen < 0 || varLen > dsr->physical_data_size)
-		{
-			ereport(ERROR,
-					(errmsg("Datum stream block %s read variable-length item index %d length too large "
-							"(nth %d, logical row count %d, "
-							"item length %d, total physical data size %d, "
-						  "current datum pointer %p, after data pointer %p)",
-						  DatumStreamVersion_String(dsr->datumStreamVersion),
-							dsr->physical_datum_index,
-							dsr->nth,
-							dsr->logical_row_count,
-							varLen,
-							dsr->physical_data_size,
-							dsr->datump,
-							dsr->datum_afterp),
-					 errdetail_datumstreamblockread(dsr),
-					 errcontext_datumstreamblockread(dsr)));
-		}
-
-		if (dsr->datump + varLen > dsr->datum_afterp)
-		{
-			ereport(ERROR,
-					(errmsg("Datum stream block %s read variable-length item index %d length goes beyond end of block "
-							"(nth %d, logical row count %d, "
-							"item length %d, "
-						  "current datum pointer %p, after data pointer %p)",
-						  DatumStreamVersion_String(dsr->datumStreamVersion),
-							dsr->physical_datum_index,
-							dsr->nth,
-							dsr->logical_row_count,
-							varLen,
-							dsr->datump,
-							dsr->datum_afterp),
-					 errdetail_datumstreamblockread(dsr),
-					 errcontext_datumstreamblockread(dsr)));
-		}
+		DatumStreamBlockRead_VerifyVarSize(dsr);
 
 		if (Debug_datumstream_read_print_varlena_info)
 		{
 			DatumStreamBlockRead_PrintVarlenaInfo(
 												  dsr,
 												  dsr->datump);
-		}
-
-		if (Debug_appendonly_print_scan_tuple)
-		{
-			ereport(LOG,
-					(errmsg("Datum stream block %s read is returning variable-length item #%d "
-					 "(nth %d, item begin %p, item offset " INT64_FORMAT ")",
-						  DatumStreamVersion_String(dsr->datumStreamVersion),
-							dsr->physical_datum_index,
-							dsr->nth,
-							dsr->datump,
-							(int64) (dsr->datump - dsr->datum_beginp)),
-					 errdetail_datumstreamblockread(dsr),
-					 errcontext_datumstreamblockread(dsr)));
 		}
 #endif
 	}
@@ -1525,6 +1562,10 @@ DatumStreamBlockRead_AdvanceOrig(DatumStreamBlockRead * dsr)
 
 			Assert(dsr->datump >= dsr->datum_beginp);
 			Assert(dsr->datump < dsr->datum_afterp);
+
+#ifdef USE_ASSERT_CHECKING
+			DatumStreamBlockRead_VerifyVarSize(dsr);
+#endif
 
 			dsr->datump += VARSIZE_ANY(s);
 
@@ -1971,6 +2012,10 @@ DatumStreamBlockRead_AdvanceDense(DatumStreamBlockRead * dsr)
 			Assert(dsr->datump >= dsr->datum_beginp);
 			Assert(dsr->datump < dsr->datum_afterp);
 
+#ifdef USE_ASSERT_CHECKING
+			DatumStreamBlockRead_VerifyVarSize(dsr);
+#endif
+
 			s = (struct varlena *) dsr->datump;
 			dsr->datump += VARSIZE_ANY(s);
 
@@ -2143,7 +2188,9 @@ extern void DatumStreamBlockRead_Init(
 						  int (*errdetailCallback) (void *errdetailArg),
 						  void *errdetailArg,
 						  int (*errcontextCallback) (void *errcontextArg),
-						  void *errcontextArg);
+						  void *errcontextArg,
+						  void (*verify_callback) (void *verify_arg),
+						  void *verify_arg);
 extern void DatumStreamBlockRead_Finish(
 							DatumStreamBlockRead * dsr);
 

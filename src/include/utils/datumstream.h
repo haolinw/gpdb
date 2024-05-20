@@ -167,6 +167,11 @@ typedef struct DatumStreamRead
 	/* AO Storage */
 	bool		need_close_file;
 
+	/* indicates which segfile is expected to be read */
+	int			expect_segno;
+	/* indicates which segfile is actually read into the buffer */
+	int			actual_segno;
+
 }	DatumStreamRead;
 
 /*
