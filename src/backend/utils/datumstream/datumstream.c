@@ -879,7 +879,7 @@ datumstreamread_close_file(DatumStreamRead * ds)
 	 * which also helps to direct to next segfile
 	 * reading in sampling scenario.
 	 */
-	ds->blockRowCount = 0;
+	// ds->blockRowCount = 0;
 	ds->need_close_file = false;
 }
 
