@@ -715,10 +715,12 @@ create_datumstreamread(
 							  &acc->typeInfo,
 							  acc->datumStreamVersion,
 							  acc->rle_can_have_compression,
-					 /* errdetailCallback */ datumstreamread_detail_callback,
+					/* errdetailCallback */ datumstreamread_detail_callback,
 							   /* errdetailArg */ (void *) acc,
-				   /* errcontextCallback */ datumstreamread_context_callback,
-							   /* errcontextArg */ (void *) acc);
+				   	/* errcontextCallback */ datumstreamread_context_callback,
+							   /* errcontextArg */ (void *) acc,
+					/* verify_callback */ datumstreamread_verify,
+							   /* verify_arg */ (void *) acc);
 
 	Assert(acc->large_object_buffer == NULL);
 	Assert(acc->large_object_buffer_size == 0);
@@ -848,6 +850,7 @@ datumstreamread_open_file(DatumStreamRead * ds, char *fn, int64 eof, int64 eofUn
 
 	AppendOnlyStorageRead_OpenFile(&ds->ao_read, fn, version, ds->eof);
 
+	ds->expect_segno = segmentFileNum;
 	ds->need_close_file = true;
 }
 
@@ -880,6 +883,7 @@ datumstreamread_close_file(DatumStreamRead * ds)
 	 * reading in sampling scenario.
 	 */
 	ds->blockRowCount = 0;
+	ds->expect_segno = InvalidFileSegNumber;
 	ds->need_close_file = false;
 }
 
@@ -1182,6 +1186,11 @@ datumstreamread_block_content(DatumStreamRead * acc)
 	Assert(acc);
 
 	/*
+	 * Sync the segno for verification in block layer.
+	 */
+	acc->actual_segno = acc->expect_segno;
+
+	/*
 	 * Clear out state from previous block.
 	 */
 	DatumStreamBlockRead_Reset(&acc->blockRead);
@@ -1232,8 +1241,9 @@ datumstreamread_block_content(DatumStreamRead * acc)
 
 		if (Debug_appendonly_print_datumstream)
 			elog(LOG,
-				 "datumstream_read_block_content filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
+				 "datumstream_read_block_content actual_segno %d filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
 				 "ndatum %u contentLen %d datump %p",
+				 acc->expect_segno,
 				 acc->ao_read.bufferedRead.filePathName,
 				 acc->getBlockInfo.firstRow,
 				 acc->getBlockInfo.rowCnt,
@@ -1381,6 +1391,26 @@ datumstreamread_rewind_block(DatumStreamRead * datumStream)
 	DatumStreamBlockRead_Reset(&datumStream->blockRead);
 
 	datumstreamread_block_get_ready(datumStream);
+}
+
+/*
+ * Callback for verification between datastreamread and datastreamblockread layers.
+ */
+void
+datumstreamread_verify(void *arg)
+{
+	DatumStreamRead *acc = (DatumStreamRead *) arg;
+
+	/* make sure the expected segfile was read into the buffer */
+	if (acc->actual_segno != acc->expect_segno)
+	{
+		ereport(FATAL,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("Verification failed, the actual segno %d in memory "
+				 		"is not euqal to the expected segno %d",
+						acc->actual_segno, acc->expect_segno),
+				 errcontext("%s", acc->title)));
+	}
 }
 
 /*

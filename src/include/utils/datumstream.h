@@ -167,6 +167,12 @@ typedef struct DatumStreamRead
 	/* AO Storage */
 	bool		need_close_file;
 
+	/* for verification and debugging */
+	/* indicates which segfile is expected to be read */
+	int			expect_segno;
+	/* indicates which segfile is actually read into the buffer */
+	int			actual_segno;
+
 }	DatumStreamRead;
 
 /*
@@ -310,6 +316,7 @@ extern int	datumstreamread_block(DatumStreamRead * ds,
 								  int colGroupNo);
 extern void datumstreamread_find(DatumStreamRead * datumStream,
 					 int32 rowNumInBlock);
+extern void datumstreamread_verify(void *arg);
 extern void datumstreamread_rewind_block(DatumStreamRead * datumStream);
 extern bool datumstreamread_find_block(DatumStreamRead * datumStream,
 						   DatumStreamFetchDesc datumStreamFetchDesc,

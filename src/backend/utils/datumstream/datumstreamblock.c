@@ -68,6 +68,103 @@ DatumStreamBlockRead_PrintVarlenaInfo(
 	elog(LOG, "Read varlena <%s>",
 		 VarlenaInfoToString(p));
 }
+
+/*
+ * Verify varlena data correctness.
+ *
+ * This is a general verification mechanism to detect data consistency
+ * issue between different layers of datumstreamread routines.
+ * 
+ * It includes:
+ * 
+ * 	- segno check, which is to ensure the expected segfile was read
+ * 	  into the buffer.
+ * 	- varlena data size check, which is to ensure varlena data size
+ * 	  doesn't exceed the boundary of the buffer memory.
+ * 
+ * If it was failed at this point, it indicates the expected block
+ * wasn't read into the buffer.
+ * 
+ * To resolve such issue, callers should guarantee
+ * datumstreamread_block_info -> datumstreamread_block_content was
+ * invoked correctly before reaching to the current position.
+ * 
+ * Refer to `gotContents` in `fetchFromCurrentBlock` function as
+ * an example.
+ */
+void
+DatumStreamBlockRead_VerifyVarData(DatumStreamBlockRead * dsr)
+{
+	struct varlena *s = (struct varlena *) dsr->datump;
+	int32 varsize = VARSIZE_ANY(s);
+	int32 varsizeexhdr = VARSIZE_ANY_EXHDR(s);
+
+	/* verify the expected segfile was read into the buffer */
+	verify_datumstreamblockread(dsr);
+
+	/* verify varlena data size */
+	if (varsize < 0 || varsize > dsr->physical_data_size ||
+		varsizeexhdr < 0 || varsizeexhdr >= varsize)
+	{
+		ereport(ERROR,
+				(errmsg("Datum stream block %s read variable-length item index %d length is invalid "
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->physical_data_size,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+				errdetail_datumstreamblockread(dsr),
+				errcontext_datumstreamblockread(dsr)));
+	}
+
+	if (dsr->datump + varsize > dsr->datum_afterp)
+	{
+		ereport(ERROR,
+				(errmsg("Datum stream block %s read variable-length item index %d length goes beyond end of block "
+						"(nth %d, logical row count %d, item length %d, item data length %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+				errdetail_datumstreamblockread(dsr),
+				errcontext_datumstreamblockread(dsr)));
+	}
+
+	if (Debug_appendonly_print_scan_tuple)
+	{
+		ereport(LOG,
+				(errmsg("Datum stream block %s read variable-length item index %d "
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->physical_data_size,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+				errdetail_datumstreamblockread(dsr),
+				errcontext_datumstreamblockread(dsr)));
+	}
+}
 #endif
 
 int
@@ -98,6 +195,15 @@ errcontext_datumstreamblockread(
 	dsr->errcontextCallback(dsr->errcontextArg);
 
 	return 0;
+}
+
+/*
+ * do necessary verification for upper layer
+ */
+void
+verify_datumstreamblockread(DatumStreamBlockRead * dsr)
+{
+	dsr->verify_callback(dsr->verify_arg);
 }
 
 static int
@@ -350,7 +456,9 @@ DatumStreamBlockRead_Init(
 						  int (*errdetailCallback) (void *errdetailArg),
 						  void *errdetailArg,
 						  int (*errcontextCallback) (void *errcontextArg),
-						  void *errcontextArg)
+						  void *errcontextArg,
+						  void (*verify_callback) (void *verify_arg),
+						  void *verify_arg)
 {
 	memcpy(dsr->eyecatcher, DatumStreamBlockRead_Eyecatcher, DatumStreamBlockRead_EyecatcherLen);
 
@@ -364,6 +472,8 @@ DatumStreamBlockRead_Init(
 	dsr->errcontextArg = errcontextArg;
 	dsr->errcontextCallback = errcontextCallback;
 	dsr->errcontextArg = errcontextArg;
+	dsr->verify_callback = verify_callback;
+	dsr->verify_arg = verify_arg;
 
 	dsr->memctxt = CurrentMemoryContext;
 

@@ -90,7 +90,7 @@ open_datumstreamread_segfile(
 
 	Assert(ds);
 	datumstreamread_open_file(ds, fn, e->eof, e->eof_uncompressed, node,
-							  fileSegNo, segInfo->formatversion);
+							  segNo, segInfo->formatversion);
 }
 
 /*
@@ -1124,6 +1124,16 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		rownum = ds->blockFirstRowNum + nrows - 1;
 	}
 
+	elogif(Debug_appendonly_print_datumstream, LOG,
+		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, expect_segno: %d, rownum: %ld, "
+		   "actual_segno in buffer: %d, segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockFirstRowNum: %ld, "
+		   "blockRowCount: %d, blockRowsProcessed: %d]",
+		   attno, endrow, startrow, segno, rownum, ds->actual_segno,
+		   scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
+		   ds->blockFirstRowNum, ds->blockRowCount, ds->blockRowsProcessed);
+
+	datumstreamread_verify(ds);
+
 	/* form the target tuple TID */
 	AOTupleIdInit(aotid, segno, rownum);
 	slot->tts_tid = fake_ctid;
@@ -1153,12 +1163,6 @@ out:
 	/* provide visimap checking result if caller asked */
 	if (chkvisimap)
 		*chkvisimap = visible;
-
-	elogif(Debug_appendonly_print_datumstream, LOG,
-		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, rownum: %ld, "
-		   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d, ret: %ld]",
-		   attno, endrow, startrow, segno, rownum, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
-		   ds->blockRowCount, ds->blockRowsProcessed, rownum);
 
 	return rownum;
 }
