@@ -1222,46 +1222,76 @@ extern void DatumStreamBlockRead_CheckDenseGetInvariant(
  * datumstreamread_block_content was invoked correctly before
  * entering into current function.
  * 
- * Refer to `gotContents` in `fetchFromCurrentBlock` function. 
+ * Refer to `gotContents` in `fetchFromCurrentBlock` function.
  */
 static inline void
 DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
 {
 	struct varlena *s = (struct varlena *) dsr->datump;
-	int32 varlen = VARSIZE_ANY(s);
+	int32 varsize = VARSIZE_ANY(s);
+	int32 varsizeexhdr = VARSIZE_ANY_EXHDR(s);
 
-	if (varlen < 0 || varlen > dsr->physical_data_size)
+	Assert(varsize > varsizeexhdr);
+
+	if (varsize < 0 || varsize > dsr->physical_data_size)
 	{
 		ereport(ERROR,
 				(errmsg("Datum stream block %s read variable-length item index %d length too large "
-						"(nth %d, logical row count %d, item length %d, total physical data size %d, "
-						"current datum pointer %p, after data pointer %p)",
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
 						DatumStreamVersion_String(dsr->datumStreamVersion),
 						dsr->physical_datum_index,
 						dsr->nth,
 						dsr->logical_row_count,
-						varlen,
+						varsize,
+						varsizeexhdr,
 						dsr->physical_data_size,
 						dsr->datump,
+						dsr->datum_beginp,
 						dsr->datum_afterp),
 				errdetail_datumstreamblockread(dsr),
 				errcontext_datumstreamblockread(dsr)));
 	}
 
-	if (dsr->datump + varlen > dsr->datum_afterp)
+	if (dsr->datump + varsize > dsr->datum_afterp)
 	{
 		ereport(ERROR,
 				(errmsg("Datum stream block %s read variable-length item index %d length goes beyond end of block "
-						"(nth %d, logical row count %d, item length %d, current datum pointer %p, after data pointer %p)",
+						"(nth %d, logical row count %d, item length %d, item data length %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
 						DatumStreamVersion_String(dsr->datumStreamVersion),
 						dsr->physical_datum_index,
 						dsr->nth,
 						dsr->logical_row_count,
-						varlen,
+						varsize,
+						varsizeexhdr,
 						dsr->datump,
+						dsr->datum_beginp,
 						dsr->datum_afterp),
 				errdetail_datumstreamblockread(dsr),
 				errcontext_datumstreamblockread(dsr)));
+	}
+
+	if (Debug_appendonly_print_scan_tuple)
+	{
+		ereport(LOG,
+				(errmsg("Datum stream block %s read variable-length item index %d "
+						"(nth %d, logical row count %d, item length %d, item data length %d, "
+						"total physical data size %d, current datum pointer %p, "
+						"begin datum pointer %p, after datum pointer %p)",
+						DatumStreamVersion_String(dsr->datumStreamVersion),
+						dsr->physical_datum_index,
+						dsr->nth,
+						dsr->logical_row_count,
+						varsize,
+						varsizeexhdr,
+						dsr->physical_data_size,
+						dsr->datump,
+						dsr->datum_beginp,
+						dsr->datum_afterp),
+					errdetail_datumstreamblockread(dsr),
+					errcontext_datumstreamblockread(dsr)));
 	}
 }
 #endif
@@ -1331,20 +1361,6 @@ DatumStreamBlockRead_Get(DatumStreamBlockRead * dsr, Datum *datum, bool *null)
 			DatumStreamBlockRead_PrintVarlenaInfo(
 												  dsr,
 												  dsr->datump);
-		}
-
-		if (Debug_appendonly_print_scan_tuple)
-		{
-			ereport(LOG,
-					(errmsg("Datum stream block %s read is returning variable-length item #%d "
-					 "(nth %d, item begin %p, item offset " INT64_FORMAT ")",
-						  DatumStreamVersion_String(dsr->datumStreamVersion),
-							dsr->physical_datum_index,
-							dsr->nth,
-							dsr->datump,
-							(int64) (dsr->datump - dsr->datum_beginp)),
-					 errdetail_datumstreamblockread(dsr),
-					 errcontext_datumstreamblockread(dsr)));
 		}
 #endif
 	}

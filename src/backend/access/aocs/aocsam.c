@@ -1124,6 +1124,13 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		rownum = ds->blockFirstRowNum + nrows - 1;
 	}
 
+	elogif(Debug_appendonly_print_datumstream, LOG,
+		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, rownum: %ld, "
+		   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockFirstRowNum: %ld, blockRowCount: %d, "
+		   "blockRowsProcessed: %d]",
+		   attno, endrow, startrow, segno, rownum, scan->segfirstrow, scan->segrowsprocessed,
+		   datumstreamread_nth(ds), ds->blockFirstRowNum, ds->blockRowCount, ds->blockRowsProcessed);
+
 	/* form the target tuple TID */
 	AOTupleIdInit(aotid, segno, rownum);
 	slot->tts_tid = fake_ctid;
@@ -1153,12 +1160,6 @@ out:
 	/* provide visimap checking result if caller asked */
 	if (chkvisimap)
 		*chkvisimap = visible;
-
-	elogif(Debug_appendonly_print_datumstream, LOG,
-		   "aocs_gettuple_column(): [attno: %d, targrow: %ld, startrow: %ld, segno: %d, rownum: %ld, "
-		   "segfirstrow: %ld, segrowsprocessed: %ld, nth: %d, blockRowCount: %d, blockRowsProcessed: %d, ret: %ld]",
-		   attno, endrow, startrow, segno, rownum, scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
-		   ds->blockRowCount, ds->blockRowsProcessed, rownum);
 
 	return rownum;
 }
