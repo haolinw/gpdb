@@ -1230,6 +1230,7 @@ DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
 	struct varlena *s = (struct varlena *) dsr->datump;
 	int32 varsize = VARSIZE_ANY(s);
 	int32 varsizeexhdr = VARSIZE_ANY_EXHDR(s);
+	DatumStreamRead *acc;
 
 	Assert(varsize > varsizeexhdr);
 
@@ -1293,6 +1294,10 @@ DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
 					errdetail_datumstreamblockread(dsr),
 					errcontext_datumstreamblockread(dsr)));
 	}
+
+	/* ensure we are reading the expected segfile */
+	acc = (DatumStreamRead *) dsr->errcontextArg;
+	Assert(acc->actual_segno == acc->expect_segno);
 }
 #endif
 

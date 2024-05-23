@@ -75,41 +75,6 @@ datumstreamread_print_large_varlena_info(
 		 VarlenaInfoToString(p));
 }
 
-static void
-datumstreamread_verify_segno(DatumStreamRead * acc)
-{
-	int testfilesegno = 0;
-	int colno, filesegno;
-	char *colstr = strstr(acc->title, "column #");
-	char *fileseg;
-
-	if (colstr != NULL)
-	{
-		char *endptr;
-
-		colstr += strlen("column #");
-		colno = (int) strtol(colstr, &endptr, 10);
-	}
-
-	Assert(colno > 0);
-	Assert(acc->segno >= 0);
-
-	filesegno = (colno - 1) * AOTupleId_MultiplierSegmentFileNum + acc->segno;
-	fileseg = strchr(acc->ao_read.bufferedRead.filePathName, '.');
-	if (fileseg != NULL)
-	{
-		fileseg++;
-		testfilesegno = atoi(fileseg);
-	}
-
-	elog(LOG, "datumstreamread_verify_segno: attno %d, acc->cursegno %d, acc->segno %d, testfilesegno %d",
-		 colno - 1, acc->cursegno, acc->segno, testfilesegno);
-
-	Assert(testfilesegno == filesegno);
-	Assert(acc->cursegno == acc->segno);
-}
-
-
 /*
  * Error detail and context callback for tracing or errors occurring during reading.
  */
@@ -125,8 +90,6 @@ datumstreamread_detail_callback(void *arg)
 	{
 		errdetail_appendonly_read_storage_content_header(&acc->ao_read);
 	}
-
-	datumstreamread_verify_segno(acc);
 
 	return 0;
 }
@@ -155,8 +118,6 @@ datumstreamread_context_callback(void *arg)
 	{
 		errcontext("%s", acc->title);
 	}
-
-	datumstreamread_verify_segno(acc);
 
 	return 0;
 }
@@ -887,7 +848,7 @@ datumstreamread_open_file(DatumStreamRead * ds, char *fn, int64 eof, int64 eofUn
 
 	AppendOnlyStorageRead_OpenFile(&ds->ao_read, fn, version, ds->eof);
 
-	ds->segno = segmentFileNum;
+	ds->expect_segno = segmentFileNum;
 	ds->need_close_file = true;
 }
 
@@ -920,7 +881,7 @@ datumstreamread_close_file(DatumStreamRead * ds)
 	 * reading in sampling scenario.
 	 */
 	ds->blockRowCount = 0;
-	ds->segno = InvalidFileSegNumber;
+	ds->expect_segno = InvalidFileSegNumber;
 	ds->need_close_file = false;
 }
 
@@ -1222,7 +1183,7 @@ datumstreamread_block_content(DatumStreamRead * acc)
 {
 	Assert(acc);
 
-	acc->cursegno = acc->segno;
+	acc->actual_segno = acc->expect_segno;
 
 	/*
 	 * Clear out state from previous block.
@@ -1275,9 +1236,9 @@ datumstreamread_block_content(DatumStreamRead * acc)
 
 		if (Debug_appendonly_print_datumstream)
 			elog(LOG,
-				 "datumstream_read_block_content segno %d filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
+				 "datumstream_read_block_content actual_segno %d filePathName %s firstRowNum " INT64_FORMAT " rowCnt %u "
 				 "ndatum %u contentLen %d datump %p",
-				 acc->segno,
+				 acc->expect_segno,
 				 acc->ao_read.bufferedRead.filePathName,
 				 acc->getBlockInfo.firstRow,
 				 acc->getBlockInfo.rowCnt,
