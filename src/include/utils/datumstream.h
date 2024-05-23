@@ -168,6 +168,7 @@ typedef struct DatumStreamRead
 	bool		need_close_file;
 
 	int			segno;
+	int			cursegno;
 
 }	DatumStreamRead;
 

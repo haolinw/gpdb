@@ -101,7 +101,12 @@ datumstreamread_verify_segno(DatumStreamRead * acc)
 		fileseg++;
 		testfilesegno = atoi(fileseg);
 	}
+
+	elog(LOG, "datumstreamread_verify_segno: attno %d, acc->cursegno %d, acc->segno %d, testfilesegno %d",
+		 colno - 1, acc->cursegno, acc->segno, testfilesegno);
+
 	Assert(testfilesegno == filesegno);
+	Assert(acc->cursegno == acc->segno);
 }
 
 
@@ -1216,6 +1221,8 @@ void
 datumstreamread_block_content(DatumStreamRead * acc)
 {
 	Assert(acc);
+
+	acc->cursegno = acc->segno;
 
 	/*
 	 * Clear out state from previous block.
