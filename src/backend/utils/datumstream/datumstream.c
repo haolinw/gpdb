@@ -122,6 +122,15 @@ datumstreamread_context_callback(void *arg)
 	return 0;
 }
 
+static void
+datumstreamread_verify_callback(void *arg)
+{
+	DatumStreamRead *acc = (DatumStreamRead *) arg;
+
+	Assert(acc->actual_segno == acc->expect_segno);
+}
+
+
 /*
  * Error detail and context callback for tracing or errors occurring during writing.
  */
@@ -715,10 +724,12 @@ create_datumstreamread(
 							  &acc->typeInfo,
 							  acc->datumStreamVersion,
 							  acc->rle_can_have_compression,
-					 /* errdetailCallback */ datumstreamread_detail_callback,
+					/* errdetailCallback */ datumstreamread_detail_callback,
 							   /* errdetailArg */ (void *) acc,
-				   /* errcontextCallback */ datumstreamread_context_callback,
-							   /* errcontextArg */ (void *) acc);
+				   	/* errcontextCallback */ datumstreamread_context_callback,
+							   /* errcontextArg */ (void *) acc,
+					/* verify_callback */ datumstreamread_verify_callback,
+							   /* verify_arg */ (void *) acc);
 
 	Assert(acc->large_object_buffer == NULL);
 	Assert(acc->large_object_buffer_size == 0);

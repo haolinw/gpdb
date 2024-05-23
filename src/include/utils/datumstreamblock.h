@@ -1185,6 +1185,9 @@ typedef struct DatumStreamBlockRead
 	int			(*errcontextCallback) (void *errcontextArg);
 	void	   *errcontextArg;
 
+	void		(*verify_callback) (void *verify_arg);
+	void		*verify_arg;
+
 	MemoryContext memctxt;
 
 }	DatumStreamBlockRead;
@@ -1200,6 +1203,9 @@ extern int errdetail_datumstreamblockread(
 							   DatumStreamBlockRead * dsr);
 
 extern int errcontext_datumstreamblockread(
+								DatumStreamBlockRead * dsr);
+
+extern void extra_verify_datumstreamblockread(
 								DatumStreamBlockRead * dsr);
 
 #ifdef USE_ASSERT_CHECKING
@@ -1230,14 +1236,12 @@ DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
 	struct varlena *s = (struct varlena *) dsr->datump;
 	int32 varsize = VARSIZE_ANY(s);
 	int32 varsizeexhdr = VARSIZE_ANY_EXHDR(s);
-	DatumStreamRead *acc;
 
-	Assert(varsize > varsizeexhdr);
-
-	if (varsize < 0 || varsize > dsr->physical_data_size)
+	if (varsize < 0 || varsize > dsr->physical_data_size ||
+		varsizeexhdr < 0 || varsizeexhdr >= varsize)
 	{
 		ereport(ERROR,
-				(errmsg("Datum stream block %s read variable-length item index %d length too large "
+				(errmsg("Datum stream block %s read variable-length item index %d length is invalid "
 						"(nth %d, logical row count %d, item length %d, item data length %d, "
 						"total physical data size %d, current datum pointer %p, "
 						"begin datum pointer %p, after datum pointer %p)",
@@ -1296,8 +1300,7 @@ DatumStreamBlockRead_VerifyVarSize(DatumStreamBlockRead * dsr)
 	}
 
 	/* ensure we are reading the expected segfile */
-	acc = (DatumStreamRead *) dsr->errcontextArg;
-	Assert(acc->actual_segno == acc->expect_segno);
+	extra_verify_datumstreamblockread(dsr);
 }
 #endif
 
@@ -2185,7 +2188,9 @@ extern void DatumStreamBlockRead_Init(
 						  int (*errdetailCallback) (void *errdetailArg),
 						  void *errdetailArg,
 						  int (*errcontextCallback) (void *errcontextArg),
-						  void *errcontextArg);
+						  void *errcontextArg,
+						  void (*verify_callback) (void *verify_arg),
+						  void *verify_arg);
 extern void DatumStreamBlockRead_Finish(
 							DatumStreamBlockRead * dsr);
 
