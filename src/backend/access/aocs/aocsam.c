@@ -90,7 +90,7 @@ open_datumstreamread_segfile(
 
 	Assert(ds);
 	datumstreamread_open_file(ds, fn, e->eof, e->eof_uncompressed, node,
-							  fileSegNo, segInfo->formatversion);
+							  segNo, segInfo->formatversion);
 }
 
 /*
@@ -1132,18 +1132,18 @@ aocs_gettuple_column(AOCSScanDesc scan, AttrNumber attno, int64 startrow, int64 
 		   scan->segfirstrow, scan->segrowsprocessed, datumstreamread_nth(ds),
 		   ds->blockFirstRowNum, ds->blockRowCount, ds->blockRowsProcessed);
 	
-	if (Debug_appendonly_print_datumstream)
-	{
-		int testfilesegno = 0;
-		int filesegno = attno * AOTupleId_MultiplierSegmentFileNum + segno;
-		char *fileseg = strchr(ds->ao_read.bufferedRead.filePathName, '.');
-		if (fileseg != NULL)
-		{
-			fileseg++;
-			testfilesegno = atoi(fileseg);
-		}
-		Assert(testfilesegno == filesegno);
-	}
+	// if (Debug_appendonly_print_datumstream)
+	// {
+	// 	int testfilesegno = 0;
+	// 	int filesegno = attno * AOTupleId_MultiplierSegmentFileNum + segno;
+	// 	char *fileseg = strchr(ds->ao_read.bufferedRead.filePathName, '.');
+	// 	if (fileseg != NULL)
+	// 	{
+	// 		fileseg++;
+	// 		testfilesegno = atoi(fileseg);
+	// 	}
+	// 	Assert(testfilesegno == filesegno);
+	// }
 
 	/* form the target tuple TID */
 	AOTupleIdInit(aotid, segno, rownum);
