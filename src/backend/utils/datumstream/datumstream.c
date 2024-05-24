@@ -877,14 +877,20 @@ datumstreamread_close_file(DatumStreamRead * ds)
 {
 	AppendOnlyStorageRead_CloseFile(&ds->ao_read);
 
+	ds->need_close_file = false;
+	ds->expect_segno = InvalidFileSegNumber;
+
+#ifdef FAULT_INJECTOR
+	if (SIMPLE_FAULT_INJECTOR("datumstreamread_closed_segfile") == FaultInjectorTypeSkip)
+		return;
+#endif
+
 	/*
 	 * Reset blockRowCount as file being closed,
 	 * which also helps to direct to next segfile
 	 * reading in sampling scenario.
 	 */
 	ds->blockRowCount = 0;
-	ds->expect_segno = InvalidFileSegNumber;
-	ds->need_close_file = false;
 }
 
 static int64

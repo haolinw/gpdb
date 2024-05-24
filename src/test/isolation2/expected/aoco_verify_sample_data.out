@@ -1,0 +1,90 @@
+--
+-- Verify whether the expected segfile data is read
+-- into the buffer or not during scanning sample rows.
+--
+
+drop table if exists verify_sample_data_aoco;
+DROP TABLE
+create table verify_sample_data_aoco (c text) using ao_column distributed replicated;
+CREATE TABLE
+
+1: begin;
+BEGIN
+2: begin;
+BEGIN
+
+1: insert into verify_sample_data_aoco values ('test1-1'), ('test1-2');
+INSERT 0 2
+2: insert into verify_sample_data_aoco values ('test2-1'), ('test2-2');
+INSERT 0 2
+
+1: commit;
+COMMIT
+2: commit;
+COMMIT
+
+select * from verify_sample_data_aoco;
+ c       
+---------
+ test1-1 
+ test1-2 
+ test2-1 
+ test2-2 
+(4 rows)
+select * from gp_toolkit.__gp_aocsseg('verify_sample_data_aoco');
+ segment_id | segno | column_num | physical_segno | tupcount | eof | eof_uncompressed | modcount | formatversion | state 
+------------+-------+------------+----------------+----------+-----+------------------+----------+---------------+-------
+ 1          | 1     | 0          | 1              | 2        | 56  | 56               | 1        | 3             | 1     
+ 1          | 2     | 0          | 2              | 2        | 56  | 56               | 1        | 3             | 1     
+ 0          | 1     | 0          | 1              | 2        | 56  | 56               | 1        | 3             | 1     
+ 0          | 2     | 0          | 2              | 2        | 56  | 56               | 1        | 3             | 1     
+ 2          | 1     | 0          | 1              | 2        | 56  | 56               | 1        | 3             | 1     
+ 2          | 2     | 0          | 2              | 2        | 56  | 56               | 1        | 3             | 1     
+(6 rows)
+
+create or replace function verify_sample_data() returns boolean as $$ declare cnt int; /* in func */ begin cnt := 0; /* in func */ while (cnt < 3) loop select count(*) into cnt from pg_catalog.gp_acquire_sample_rows('verify_sample_data_aoco'::regclass, 3, 'f') as (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, c text) where c = 'test1-1' or c = 'test2-1' or c = 'test2-2' and c != 'test1-2'; /* in func */ end loop; /* in func */ return true; /* in func */ end; /* in func */ $$ language plpgsql;
+CREATE FUNCTION
+
+-- inject fault to simulate the expected segfile data isn't read into memory
+select gp_inject_fault_infinite('datumstreamread_closed_segfile', 'skip', dbid) from gp_segment_configuration where content != -1 AND role = 'p';
+ gp_inject_fault_infinite 
+--------------------------
+ Success:                 
+ Success:                 
+ Success:                 
+(3 rows)
+
+analyze verify_sample_data_aoco;
+ANALYZE
+
+select gp_wait_until_triggered_fault('datumstreamread_closed_segfile', 1, dbid) from gp_segment_configuration where content != -1 AND role = 'p';
+ gp_wait_until_triggered_fault 
+-------------------------------
+ Success:                      
+ Success:                      
+ Success:                      
+(3 rows)
+
+-- expect verification failed as actual_segno != expect_segno
+select verify_sample_data();
+ERROR:  Verification failed, the actual segno 1 in memory is not euqal to the expected segno 2 (datumstream.c:1418)  (seg0 slice1 10.117.190.62:7002 pid=6456) (datumstream.c:1418)
+CONTEXT:  Scan of Append-Only Column-Oriented relation 'verify_sample_data_aoco', column #1 'c'
+SQL statement "select count(*)          from pg_catalog.gp_acquire_sample_rows('verify_sample_data_aoco'::regclass, 3, 'f') as
+            (totalrows pg_catalog.float8, totaldeadrows pg_catalog.float8, oversized_cols_length pg_catalog._float8, c text)
+            where c = 'test1-1' or c = 'test2-1' or c = 'test2-2' and c != 'test1-2'"
+PL/pgSQL function verify_sample_data() line 8 at SQL statement
+
+select gp_inject_fault('datumstreamread_closed_segfile', 'reset', dbid) from gp_segment_configuration where content != -1 AND role = 'p';
+ gp_inject_fault 
+-----------------
+ Success:        
+ Success:        
+ Success:        
+(3 rows)
+
+-- expect verification successful after fix
+select verify_sample_data();
+ verify_sample_data 
+--------------------
+ t                  
+(1 row)
