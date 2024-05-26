@@ -9012,6 +9012,22 @@ GetLastImportantRecPtr(void)
 }
 
 /*
+ * GetLastCheckpointRecPtr -- Returns the LSN of the last checkpoint XLOG
+ * record inserted.
+ */
+XLogRecPtr
+GetLastCheckpointRecPtr(void)
+{
+	XLogRecPtr      res = InvalidXLogRecPtr;
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	res = ControlFile->checkPoint;
+	LWLockRelease(ControlFileLock);
+
+	return res;
+}
+
+/*
  * Get the time and LSN of the last xlog segment switch
  */
 pg_time_t

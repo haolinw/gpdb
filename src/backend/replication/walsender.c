@@ -201,6 +201,7 @@ static bool streamingDoneReceiving;
 static bool WalSndCaughtUp = false;
 static bool WalSndCaughtUpWithinRange = false;
 
+static XLogRecPtr last_common_chkpt_lsn = InvalidXLogRecPtr;
 
 /* Flags set by signal handlers for later service in main loop */
 static volatile sig_atomic_t got_SIGUSR2 = false;
@@ -1843,20 +1844,24 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 	bool		changed = false;
 	ReplicationSlot *slot = MyReplicationSlot;
 	/*
-	 * GPDB: we have to retrieve the redo point from shared memory because the
-	 * walsender's local copy of RedoRecPtr doesn't get updated after the
-	 * process starts. For most cases in Greenplum each segment should only have
-	 * one (internally created) replication slot, so this should not introduce
-	 * much contention on acquiring the spin lock.
+	 * GPDB: retrieve the last checkpoint record location from shared
+	 * memory.
 	 */
-	XLogRecPtr	last_chkpt = GetRedoRecPtr();
+	XLogRecPtr	last_chkpt = GetLastCheckpointRecPtr();
+
+	/*
+	 * Update the last_common_chkpt_lsn if the last checkpoint XLOG
+	 * record was received by wal receiver.
+	 */
+	if (last_chkpt < lsn)
+		last_common_chkpt_lsn = last_chkpt;
 
 	Assert(lsn != InvalidXLogRecPtr);
 	SpinLockAcquire(&slot->mutex);
-	if (slot->data.restart_lsn != lsn && slot->data.restart_lsn < last_chkpt)
+	if (slot->data.restart_lsn < last_common_chkpt_lsn)
 	{
 		changed = true;
-		slot->data.restart_lsn = last_chkpt < lsn ? last_chkpt : lsn;
+		slot->data.restart_lsn = last_common_chkpt_lsn;
 	}
 	SpinLockRelease(&slot->mutex);
 

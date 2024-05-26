@@ -158,6 +158,12 @@ INSERT INTO tst_missing_tbl values(2),(1),(5);
 1: INSERT INTO tst_missing_tbl values(2),(1),(5);
 0Uq:
 
+1: SELECT gp_inject_fault_infinite('before_wait_VirtualXIDsDelayingChkpt', 'suspend', dbid) FROM gp_segment_configuration WHERE content = 0 AND role = 'p';
+0U&: CHECKPOINT;
+1: SELECT gp_wait_until_triggered_fault('before_wait_VirtualXIDsDelayingChkpt', 1, dbid) FROM gp_segment_configuration WHERE content = 0 AND role = 'p';
+3: CREATE TABLE temp_rewind_missing_xlog(c1 int, c2 int);
+3: DROP TABLE temp_rewind_missing_xlog;
+
 -- Make sure primary/mirror pair is in sync, otherwise FTS can't promote mirror
 1: SELECT wait_until_all_segments_synchronized();
 -- Mark down the primary with content 0 via fts fault injection.
@@ -166,6 +172,11 @@ INSERT INTO tst_missing_tbl values(2),(1),(5);
 -- Trigger failover and double check.
 1: SELECT gp_request_fts_probe_scan();
 1: SELECT role, preferred_role from gp_segment_configuration where content = 0;
+
+1: SELECT gp_inject_fault_infinite('before_wait_VirtualXIDsDelayingChkpt', 'reset', dbid) FROM gp_segment_configuration WHERE content = 0 AND role = 'm';
+0U<:
+0Uq:
+3q:
 
 -- Run two more checkpoints. Previously this causes the checkpoint.redo wal
 -- file before the oldest replication slot LSN is recycled/removed.
@@ -275,9 +286,9 @@ INSERT INTO tst_missing_tbl values(2),(1),(5);
 1U: CREATE UNLOGGED TABLE unlogged_wal_retention_test(restart_lsn_before pg_lsn, wal_count_before int);
 1U: INSERT INTO unlogged_wal_retention_test SELECT (select restart_lsn FROM pg_replication_slots WHERE slot_name = 'internal_wal_replication_slot') as restart_lsn_before, (select count(*) from pg_ls_waldir()) as wal_count_before;
 5: CHECKPOINT;
--- Replication slot's restart_lsn should advance to the checkpoint's redo location.
+-- Replication slot's restart_lsn should advance to the last checkpoint location.
 1U: SELECT pg_wal_lsn_diff(restart_lsn, restart_lsn_before) > 0 from pg_replication_slots, unlogged_wal_retention_test WHERE slot_name = 'internal_wal_replication_slot';
-1U: SELECT pg_wal_lsn_diff(restart_lsn, redo_lsn) = 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
+1U: SELECT pg_wal_lsn_diff(restart_lsn, checkpoint_lsn) = 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
 -- Some old WALs should be removed
 1U: select ((select count(*)::int from pg_ls_waldir()) - wal_count_before) < 0 FROM unlogged_wal_retention_test;
 -- Record the restart_lsn and the WAL file count.
@@ -292,24 +303,24 @@ INSERT INTO tst_missing_tbl values(2),(1),(5);
 
 -- Hang the wal sender before writing more wals.
 5: SELECT gp_inject_fault('wal_sender_loop', 'suspend', dbid) FROM gp_segment_configuration WHERE role='p' AND content = 1;
--- Perform checkpoint. This is to mimic walreciver's confirmed received lsn is behind the redo lsn.
+-- Perform checkpoint. This is to mimic walreciver's confirmed received lsn is behind the last checkpoint lsn.
 1U: CHECKPOINT;
 
 -- Replication slot's restart_lsn should NOT change regardless a new checkpoints was performed.
 1U: select pg_wal_lsn_diff(restart_lsn, restart_lsn_before) = 0 FROM pg_replication_slots, unlogged_wal_retention_test WHERE slot_name = 'internal_wal_replication_slot';
--- Replication slot's restart_lsn should be smaller than the checkpoint's redo location.
-1U: SELECT pg_wal_lsn_diff(restart_lsn, redo_lsn) < 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
+-- Replication slot's restart_lsn should be smaller than the last checkpoint location.
+1U: SELECT pg_wal_lsn_diff(restart_lsn, checkpoint_lsn) < 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
 
 -- Resume walsender.
 5: SELECT gp_inject_fault('wal_sender_loop', 'reset', dbid) FROM gp_segment_configuration WHERE role='p' AND content = 1;
 -- Perform transaction to make sure wals are in sync.
 5: INSERT INTO tst_missing_tbl values(2),(1),(5);
--- Replication slot's restart_lsn should now advance to the checkpoint's redo location.
+-- Replication slot's restart_lsn should now advance to the last checkpoint location.
 1U: SELECT pg_wal_lsn_diff(restart_lsn, restart_lsn_before) > 0 from pg_replication_slots, unlogged_wal_retention_test WHERE slot_name = 'internal_wal_replication_slot';
-1U: SELECT pg_wal_lsn_diff(restart_lsn, redo_lsn) = 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
+1U: SELECT pg_wal_lsn_diff(restart_lsn, checkpoint_lsn) = 0 from pg_replication_slots, pg_control_checkpoint() WHERE slot_name = 'internal_wal_replication_slot';
 -- Trigger old WAL removal.
 1U: CHECKPOINT;
--- And the WAL file(s) older than the redo lsn that we previously kept should now be removed.
+-- And the WAL file(s) older than the last checkpoint lsn that we previously kept should now be removed.
 1U: select ((select count(*)::int from pg_ls_waldir()) - wal_count_before) < 0 FROM unlogged_wal_retention_test;
 
 -- Cleanup
