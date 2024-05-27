@@ -171,7 +171,7 @@ INSERT INTO tst_missing_tbl values(2),(1),(5);
 
 -- Trigger failover and double check.
 1: SELECT gp_request_fts_probe_scan();
-1: SELECT role, preferred_role from gp_segment_configuration where content = 0;
+1: SELECT role, preferred_role, status from gp_segment_configuration where content = 0;
 
 1: SELECT gp_inject_fault_infinite('before_wait_VirtualXIDsDelayingChkpt', 'reset', dbid) FROM gp_segment_configuration WHERE content = 0 AND role = 'm';
 0U<:

@@ -1849,6 +1849,11 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 	 */
 	XLogRecPtr	last_chkpt = GetLastCheckpointRecPtr();
 
+	// [DEBUG]
+	XLogRecPtr	last_chkpt_redo = GetLastCheckpointRedoRecPtr();
+	XLogRecPtr	last_redo = GetRedoRecPtr();
+	XLogRecPtr	restart_lsn;
+
 	/*
 	 * Update the last_common_chkpt_lsn if the last checkpoint XLOG
 	 * record was received by wal receiver.
@@ -1858,12 +1863,27 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 
 	Assert(lsn != InvalidXLogRecPtr);
 	SpinLockAcquire(&slot->mutex);
+	// [DEBUG]
+	restart_lsn = slot->data.restart_lsn;
+
 	if (slot->data.restart_lsn < last_common_chkpt_lsn)
 	{
+		// [DEBUG]
+		restart_lsn = slot->data.restart_lsn;
+
 		changed = true;
 		slot->data.restart_lsn = last_common_chkpt_lsn;
 	}
 	SpinLockRelease(&slot->mutex);
+
+	// [DEBUG]
+	elog(LOG, "[missing-xlog debug] last_chkpt = %X/%X, last_chkpt_redo = %X/%X, last_redo = %X/%X, lsn = %X/%X, restart_lsn = %X/%X, last_common_chkpt_lsn = %X/%X",
+		 (uint32) (last_chkpt >> 32), (uint32) last_chkpt,
+		 (uint32) (last_chkpt_redo >> 32), (uint32) last_chkpt_redo,
+		 (uint32) (last_redo >> 32), (uint32) last_redo,
+		 (uint32) (lsn >> 32), (uint32) lsn,
+		 (uint32) (restart_lsn >> 32), (uint32) restart_lsn,
+		 (uint32) (last_common_chkpt_lsn >> 32), (uint32) last_common_chkpt_lsn);
 
 	if (changed)
 	{

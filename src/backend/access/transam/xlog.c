@@ -9027,6 +9027,20 @@ GetLastCheckpointRecPtr(void)
 	return res;
 }
 
+// [DEBuG]
+
+XLogRecPtr
+GetLastCheckpointRedoRecPtr(void)
+{
+	XLogRecPtr      res = InvalidXLogRecPtr;
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	res = ControlFile->checkPointCopy.redo;
+	LWLockRelease(ControlFileLock);
+
+	return res;
+}
+
 /*
  * Get the time and LSN of the last xlog segment switch
  */

@@ -331,11 +331,11 @@ DROP TABLE
 ---------------------------
  t                         
 (1 row)
-1: SELECT role, preferred_role from gp_segment_configuration where content = 0;
- role | preferred_role 
-------+----------------
- m    | m              
- p    | p              
+1: SELECT role, preferred_role, status from gp_segment_configuration where content = 0;
+ role | preferred_role | status 
+------+----------------+--------
+ m    | m              | d      
+ p    | p              | u      
 (2 rows)
 
 1: SELECT gp_inject_fault_infinite('before_wait_VirtualXIDsDelayingChkpt', 'reset', dbid) FROM gp_segment_configuration WHERE content = 0 AND role = 'm';

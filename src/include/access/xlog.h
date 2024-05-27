@@ -355,6 +355,7 @@ extern XLogRecPtr GetInsertRecPtr(void);
 extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern XLogRecPtr GetLastCheckpointRecPtr(void);
+extern XLogRecPtr GetLastCheckpointRedoRecPtr(void); // [DEBUG]
 extern void RemovePromoteSignalFiles(void);
 
 extern void HandleStartupProcInterrupts(void);
