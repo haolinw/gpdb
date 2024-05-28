@@ -9012,19 +9012,16 @@ GetLastImportantRecPtr(void)
 }
 
 /*
- * GetLastCheckpointRecPtr -- Returns the LSN of the last checkpoint XLOG
- * record inserted.
+ * GetLastCheckpointRecPtr -- Get the LSN of the last checkpoint XLOG
+ * record inserted and its redo location.
  */
-XLogRecPtr
-GetLastCheckpointRecPtr(void)
+void
+GetLastCheckpointRecPtr(XLogRecPtr *checkpointRec, XLogRecPtr *checkpointRedo)
 {
-	XLogRecPtr      res = InvalidXLogRecPtr;
-
 	LWLockAcquire(ControlFileLock, LW_SHARED);
-	res = ControlFile->checkPoint;
+	*checkpointRec = ControlFile->checkPoint;
+	*checkpointRedo = ControlFile->checkPointCopy.redo;
 	LWLockRelease(ControlFileLock);
-
-	return res;
 }
 
 // [DEBuG]

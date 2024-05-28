@@ -201,8 +201,6 @@ static bool streamingDoneReceiving;
 static bool WalSndCaughtUp = false;
 static bool WalSndCaughtUpWithinRange = false;
 
-static XLogRecPtr last_common_chkpt_lsn = InvalidXLogRecPtr;
-
 /* Flags set by signal handlers for later service in main loop */
 static volatile sig_atomic_t got_SIGUSR2 = false;
 static volatile sig_atomic_t got_STOPPING = false;
@@ -1843,47 +1841,37 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
 	ReplicationSlot *slot = MyReplicationSlot;
+	XLogRecPtr	last_chkpt = InvalidXLogRecPtr;
+	XLogRecPtr	last_chkpt_redo = InvalidXLogRecPtr;
 	/*
 	 * GPDB: retrieve the last checkpoint record location from shared
 	 * memory.
 	 */
-	XLogRecPtr	last_chkpt = GetLastCheckpointRecPtr();
+	GetLastCheckpointRecPtr(&last_chkpt, &last_chkpt_redo);
 
 	// [DEBUG]
-	XLogRecPtr	last_chkpt_redo = GetLastCheckpointRedoRecPtr();
 	XLogRecPtr	last_redo = GetRedoRecPtr();
 	XLogRecPtr	restart_lsn;
-
-	/*
-	 * Update the last_common_chkpt_lsn if the last checkpoint XLOG
-	 * record was received by wal receiver.
-	 */
-	if (last_chkpt < lsn)
-		last_common_chkpt_lsn = last_chkpt;
 
 	Assert(lsn != InvalidXLogRecPtr);
 	SpinLockAcquire(&slot->mutex);
 	// [DEBUG]
 	restart_lsn = slot->data.restart_lsn;
 
-	if (slot->data.restart_lsn < last_common_chkpt_lsn)
+	if (slot->data.restart_lsn < last_chkpt_redo && last_chkpt < lsn)
 	{
-		// [DEBUG]
-		restart_lsn = slot->data.restart_lsn;
-
 		changed = true;
-		slot->data.restart_lsn = last_common_chkpt_lsn;
+		slot->data.restart_lsn = last_chkpt_redo;
 	}
 	SpinLockRelease(&slot->mutex);
 
 	// [DEBUG]
-	elog(LOG, "[missing-xlog debug] last_chkpt = %X/%X, last_chkpt_redo = %X/%X, last_redo = %X/%X, lsn = %X/%X, restart_lsn = %X/%X, last_common_chkpt_lsn = %X/%X",
+	elog(LOG, "[missing-xlog debug] last_chkpt = %X/%X, last_chkpt_redo = %X/%X, last_redo = %X/%X, lsn = %X/%X, restart_lsn = %X/%X",
 		 (uint32) (last_chkpt >> 32), (uint32) last_chkpt,
 		 (uint32) (last_chkpt_redo >> 32), (uint32) last_chkpt_redo,
 		 (uint32) (last_redo >> 32), (uint32) last_redo,
 		 (uint32) (lsn >> 32), (uint32) lsn,
-		 (uint32) (restart_lsn >> 32), (uint32) restart_lsn,
-		 (uint32) (last_common_chkpt_lsn >> 32), (uint32) last_common_chkpt_lsn);
+		 (uint32) (restart_lsn >> 32), (uint32) restart_lsn);
 
 	if (changed)
 	{
